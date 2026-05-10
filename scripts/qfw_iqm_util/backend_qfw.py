@@ -32,5 +32,18 @@ class QFwIQMBackend:
 	def sync_run(self, info):
 		return self._service().sync_run(info)
 
+	def sync_run_many(self, infos):
+		results = []
+		for info in infos:
+			results.append(self.sync_run(info))
+		return {
+			"cid": "qfw-sequential-batch",
+			"result": {
+				"batch_semantics": "sequential-qfw-sync-run",
+				"results": results,
+			},
+			"rc": 0,
+		}
+
 	def finish(self, rc: int = 0) -> int:
 		return finish(rc)

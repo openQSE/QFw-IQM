@@ -455,6 +455,13 @@ def normalize_counts(measurement_counts):
 	return first if isinstance(first, dict) else {}
 
 
+def normalize_counts_list(measurement_counts):
+	data = to_jsonable(measurement_counts)
+	if isinstance(data, list):
+		return [normalize_counts(item) for item in data]
+	return [normalize_counts(data)]
+
+
 class DirectIQMBackend:
 	name = "direct"
 
@@ -560,23 +567,43 @@ class DirectIQMBackend:
 			**build_coupling_graph(static, dynamic),
 		}
 
-	def sync_run(self, info):
+	def _run_iqm_circuits(self, infos):
+		if not infos:
+			raise RuntimeError("no circuits were supplied")
+		first = infos[0]
 		calibration_set_id = parse_calibration_set_id(
-			info.get("calibration_set_id")
-			or info.get("iqm_calibration_set_id"))
-		use_timeslot = bool(info.get("use_timeslot", False))
-		shots = int(info.get("num_shots", info.get("shots", 1)))
-		timeout = float(info.get("timeout", self._job_timeout))
-		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
-		cid = info.get("cid") or f"direct-{int(time.time() * 1000)}"
+			first.get("calibration_set_id")
+			or first.get("iqm_calibration_set_id"))
+		use_timeslot = bool(first.get("use_timeslot", False))
+		shots = int(first.get("num_shots", first.get("shots", 1)))
+		timeout = float(first.get("timeout", self._job_timeout))
+		cid = first.get("cid") or f"direct-{int(time.time() * 1000)}"
+
+		for info in infos[1:]:
+			info_calibration = parse_calibration_set_id(
+				info.get("calibration_set_id")
+				or info.get("iqm_calibration_set_id"))
+			info_shots = int(info.get("num_shots", info.get("shots", 1)))
+			if info_calibration != calibration_set_id:
+				raise RuntimeError(
+					"direct IQM batch submission requires all circuits "
+					"to use the same calibration set")
+			if info_shots != shots:
+				raise RuntimeError(
+					"direct IQM batch submission requires all circuits "
+					"to use the same shot count")
 
 		timing = {}
 		start = time.monotonic()
 		dynamic = self.get_dynamic_architecture(calibration_set_id)
-		iqm_circuit = build_manual_iqm_circuit(
-			info["qasm"], dynamic, mapping)
+		iqm_circuits = []
+		for info in infos:
+			mapping = (
+				info.get("iqm_qubit_mapping") or info.get("qubit_mapping"))
+			iqm_circuits.append(build_manual_iqm_circuit(
+				info["qasm"], dynamic, mapping))
 		run_request = self.client().create_run_request(
-			[iqm_circuit],
+			iqm_circuits,
 			calibration_set_id=calibration_set_id,
 			shots=shots)
 
@@ -609,10 +636,12 @@ class DirectIQMBackend:
 
 		counts_data = to_jsonable(measurement_counts)
 		counts = normalize_counts(measurement_counts)
+		counts_by_circuit = normalize_counts_list(measurement_counts)
 		record = {
 			"cid": cid,
 			"timestamp_utc": datetime.now(timezone.utc).isoformat(),
 			"input": {
+				"num_circuits": len(infos),
 				"shots": shots,
 				"calibration_set_id": str(calibration_set_id)
 				if calibration_set_id else None,
@@ -632,10 +661,13 @@ class DirectIQMBackend:
 		return {
 			"cid": cid,
 			"result": {
-				"counts": counts,
+				"counts": counts if len(infos) == 1 else counts_by_circuit,
 				"iqm": {
 					"job_id": str(job.job_id),
 					"status": status,
+					"batch_semantics": "single-iqm-job",
+					"num_circuits": len(infos),
+					"counts_by_circuit": counts_by_circuit,
 					"measurement_counts": counts_data,
 					"timing_summary": timing_summary,
 					"metadata": record,
@@ -643,6 +675,12 @@ class DirectIQMBackend:
 			},
 			"rc": 0,
 		}
+
+	def sync_run(self, info):
+		return self._run_iqm_circuits([info])
+
+	def sync_run_many(self, infos):
+		return self._run_iqm_circuits(infos)
 
 	def finish(self, rc: int = 0) -> int:
 		return rc

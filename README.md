@@ -49,6 +49,7 @@ one Python script through `qfw_srun.sh`, and tears QFw down.
 ./qfw_iqm_env_check.sh --json
 ./qfw_iqm_discover.sh --json
 ./qfw_iqm_submit_smoke.sh --shots 100 --json
+./qfw_iqm_timing_overhead.sh --shots-sweep 1,10,100 --batch-sweep 1,2 --json
 ```
 
 To force direct mode:
@@ -57,6 +58,7 @@ To force direct mode:
 ./qfw_iqm_env_check.sh --backend direct --json
 ./qfw_iqm_discover.sh --backend direct --json
 ./qfw_iqm_submit_smoke.sh --backend direct --shots 100 --json
+./qfw_iqm_timing_overhead.sh --backend direct --shots-sweep 1,10,100 --json
 ```
 
 To run the current suite in one QFw session:
@@ -64,6 +66,10 @@ To run the current suite in one QFw session:
 ```bash
 ./qfw_iqm_run_all.sh
 ```
+
+`qfw_iqm_run_all.sh` intentionally does not include timing campaigns. Timing
+scripts submit multiple jobs and should be run explicitly with the desired
+shot sweep, batch sweep, and repetition count.
 
 Output is written under:
 
