@@ -105,3 +105,23 @@ or `qfw_teardown.sh`. They execute the Python workflow locally and use
 `iqm-client` with `QFW_QC_URL` and `QFW_API_KEY`. This mode is useful for
 early machine characterization and for sharing the scripts with users who do
 not have QFw installed.
+
+## Adding Workflows
+
+New shell wrappers should source `qfw_iqm_common.sh` rather than reimplement
+backend parsing or QFw startup. A minimal wrapper looks like:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${repo_dir}/qfw_iqm_common.sh"
+
+qfw_iqm_init "$@"
+qfw_iqm_run_single "scripts/new_workflow.py" "$@"
+```
+
+The Python script should add the common backend option with
+`add_backend_argument(parser)` and construct the backend with
+`get_backend(args.backend, args.system_up_timeout)`.
