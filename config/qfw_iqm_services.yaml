@@ -1,0 +1,9 @@
+services:
+  - name: iqm
+    module: svc_iqm_qpm
+    load-modules: svc_iqm_qpm
+    agent-prefix: qpm_iqm
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+
