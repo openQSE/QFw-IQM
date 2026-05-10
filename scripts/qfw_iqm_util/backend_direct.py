@@ -14,6 +14,9 @@ import re
 import time
 
 from qfw_iqm_util.output import to_jsonable
+from qfw_iqm_util.qiskit_exec import build_qiskit_run_record
+from qfw_iqm_util.qiskit_exec import ensure_circuit_list
+from qfw_iqm_util.qiskit_exec import optional_attr_data
 from qfw_iqm_util.timing import build_timing_summary
 
 REQUIRED_ENV = ("QFW_QC_URL", "QFW_API_KEY")
@@ -467,6 +470,8 @@ class DirectIQMBackend:
 
 	def __init__(self):
 		self._client = None
+		self._qiskit_provider = None
+		self._qiskit_backends = {}
 		self._config = load_env()
 		self._request_timeout = get_env_float(
 			"QFW_IQM_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
@@ -681,6 +686,57 @@ class DirectIQMBackend:
 
 	def sync_run_many(self, infos):
 		return self._run_iqm_circuits(infos)
+
+	def qiskit_provider(self):
+		if self._qiskit_provider is None:
+			try:
+				from iqm.qiskit_iqm import IQMProvider
+			except Exception as exc:
+				raise RuntimeError(
+					"iqm.qiskit_iqm is required for direct Qiskit "
+					f"execution: {exc}") from exc
+			kwargs = {"token": self._config.api_key}
+			if self._config.quantum_computer:
+				kwargs["quantum_computer"] = self._config.quantum_computer
+			self._qiskit_provider = IQMProvider(self._config.url, **kwargs)
+		return self._qiskit_provider
+
+	def qiskit_backend(self, calibration_set_id=None):
+		calibration_set_id = parse_calibration_set_id(calibration_set_id)
+		cache_key = str(calibration_set_id) if calibration_set_id else "default"
+		if cache_key not in self._qiskit_backends:
+			self._qiskit_backends[cache_key] = (
+				self.qiskit_provider().get_backend(
+					calibration_set_id=calibration_set_id))
+		return self._qiskit_backends[cache_key]
+
+	def run_circuits(self, circuits, shots: int = 100,
+		     calibration_set_id=None, timeout=None, use_timeslot=False):
+		circuit_list = ensure_circuit_list(circuits)
+		run_input = circuit_list[0] if len(circuit_list) == 1 else circuit_list
+		backend = self.qiskit_backend(calibration_set_id)
+		run_start = time.monotonic()
+		job = backend.run(
+			run_input,
+			shots=shots,
+			use_timeslot=use_timeslot)
+		result = job.result(timeout=timeout or self._job_timeout)
+		iqm_job = optional_attr_data(job, "_job")
+		return build_qiskit_run_record(
+			self.name,
+			circuit_list,
+			shots,
+			run_start,
+			job,
+			result,
+			extra={
+				"iqm": {
+					"calibration_set_id": calibration_set_id,
+					"use_timeslot": use_timeslot,
+					"job": iqm_job,
+				},
+			},
+		)
 
 	def finish(self, rc: int = 0) -> int:
 		return rc
