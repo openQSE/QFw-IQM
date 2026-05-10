@@ -125,3 +125,7 @@ qfw_iqm_run_single "scripts/new_workflow.py" "$@"
 The Python script should add the common backend option with
 `add_backend_argument(parser)` and construct the backend with
 `get_backend(args.backend, args.system_up_timeout)`.
+
+The `_qasm.py` scripts are retained as lower-level examples that build
+OpenQASM directly. Characterization workflows should prefer Qiskit-authored
+circuits unless they are explicitly testing OpenQASM handling.
