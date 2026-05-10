@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the IQM QPM service through QFw."""
+"""Validate access to an IQM backend."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from qfw_iqm_util.backend import add_backend_argument, get_backend
 from qfw_iqm_util.output import create_run_paths, to_jsonable, write_json
-from qfw_iqm_util.qfw import finish, reserve_iqm_qpm
 
 
 def summarize_backend(info: dict[str, Any]) -> dict[str, Any]:
@@ -28,12 +28,13 @@ def summarize_backend(info: dict[str, Any]) -> dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
-		description="Check that QFw can reach an IQM QPM service.",
+		description="Check that QFw-IQM can reach an IQM backend.",
 	)
 	parser.add_argument("--output-dir", type=Path, default=None)
 	parser.add_argument("--run-id", default=None)
 	parser.add_argument("--system-up-timeout", type=int, default=40)
 	parser.add_argument("--calibration-set-id", default=None)
+	add_backend_argument(parser)
 	parser.add_argument("--json", action="store_true")
 	return parser.parse_args()
 
@@ -41,13 +42,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
 	args = parse_args()
 	paths = create_run_paths(__file__, args.output_dir, args.run_id)
-	qpm = reserve_iqm_qpm(args.system_up_timeout)
+	backend = get_backend(args.backend, args.system_up_timeout)
 
 	result = {
 		"ok": True,
-		"backend_info": to_jsonable(qpm.get_backend_info()),
+		"backend_mode": backend.name,
+		"backend_info": to_jsonable(backend.get_backend_info()),
 		"dynamic_backend_info": to_jsonable(
-			qpm.get_dynamic_backend_info(args.calibration_set_id)),
+			backend.get_dynamic_backend_info(args.calibration_set_id)),
 	}
 	result["summary"] = summarize_backend(result["backend_info"])
 
@@ -65,7 +67,7 @@ def main() -> int:
 		print(f"calibration set: {summary['calibration_set_id']}")
 		print(f"output: {output_file}")
 
-	return finish(0)
+	return backend.finish(0)
 
 
 if __name__ == "__main__":

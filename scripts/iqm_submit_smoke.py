@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit a one-qubit smoke circuit through the QFw IQM QPM service."""
+"""Submit a one-qubit smoke circuit through the selected IQM backend."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from qfw_iqm_util.backend import add_backend_argument, get_backend
 from qfw_iqm_util.output import create_run_paths, to_jsonable, write_json
-from qfw_iqm_util.qfw import finish, reserve_iqm_qpm
 from qfw_iqm_util.timing import build_timing_summary
 
 
@@ -29,7 +29,7 @@ def build_smoke_qasm(flip: bool) -> str:
 
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
-		description="Run a minimal IQM circuit through QFw.",
+		description="Run a minimal IQM circuit.",
 	)
 	parser.add_argument("--output-dir", type=Path, default=None)
 	parser.add_argument("--run-id", default=None)
@@ -40,6 +40,7 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument("--timeout", type=float, default=300.0)
 	parser.add_argument("--use-timeslot", action="store_true")
 	parser.add_argument("--flip", action="store_true")
+	add_backend_argument(parser)
 	parser.add_argument("--json", action="store_true")
 	return parser.parse_args()
 
@@ -47,7 +48,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
 	args = parse_args()
 	paths = create_run_paths(__file__, args.output_dir, args.run_id)
-	qpm = reserve_iqm_qpm(args.system_up_timeout)
+	backend = get_backend(args.backend, args.system_up_timeout)
 
 	qasm = build_smoke_qasm(args.flip)
 	info = {
@@ -71,7 +72,7 @@ def main() -> int:
 	qasm_file.write_text(qasm)
 	write_json(input_file, info)
 
-	result = to_jsonable(qpm.sync_run(info))
+	result = to_jsonable(backend.sync_run(info))
 	write_json(result_file, result)
 
 	payload = result.get("result", {})
@@ -86,6 +87,7 @@ def main() -> int:
 		"ok": result.get("rc") == 0,
 		"run_id": paths.run_id,
 		"date_id": paths.date_id,
+		"backend_mode": backend.name,
 		"output_dir": str(paths.root),
 		"job_id": iqm_payload.get("job_id"),
 		"status": iqm_payload.get("status"),
@@ -109,7 +111,7 @@ def main() -> int:
 		for name, path in summary["files"].items():
 			print(f"{name}: {path}")
 
-	return finish(0 if summary["ok"] else 2)
+	return backend.finish(0 if summary["ok"] else 2)
 
 
 if __name__ == "__main__":

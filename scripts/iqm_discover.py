@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect IQM discovery data through the QFw IQM QPM service."""
+"""Collect IQM discovery data through the selected backend."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from qfw_iqm_util.backend import add_backend_argument, get_backend
 from qfw_iqm_util.output import create_run_paths, to_jsonable, write_json
-from qfw_iqm_util.qfw import finish, reserve_iqm_qpm
 
 
 def summarize_native_gates(dynamic_info: dict[str, Any]) -> list[dict[str, Any]]:
@@ -72,12 +72,13 @@ def build_qschedsim_skeleton(device_snapshot: dict[str, Any],
 
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
-		description="Discover IQM architecture and calibration through QFw.",
+		description="Discover IQM architecture and calibration data.",
 	)
 	parser.add_argument("--output-dir", type=Path, default=None)
 	parser.add_argument("--run-id", default=None)
 	parser.add_argument("--system-up-timeout", type=int, default=40)
 	parser.add_argument("--calibration-set-id", default=None)
+	add_backend_argument(parser)
 	parser.add_argument("--json", action="store_true")
 	return parser.parse_args()
 
@@ -85,17 +86,18 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
 	args = parse_args()
 	paths = create_run_paths(__file__, args.output_dir, args.run_id)
-	qpm = reserve_iqm_qpm(args.system_up_timeout)
+	backend = get_backend(args.backend, args.system_up_timeout)
 
 	device_snapshot = {
-		"backend_info": to_jsonable(qpm.get_backend_info()),
+		"backend_mode": backend.name,
+		"backend_info": to_jsonable(backend.get_backend_info()),
 		"dynamic_backend_info": to_jsonable(
-			qpm.get_dynamic_backend_info(args.calibration_set_id)),
+			backend.get_dynamic_backend_info(args.calibration_set_id)),
 	}
 	calibration_snapshot = to_jsonable(
-		qpm.get_calibration_snapshot(args.calibration_set_id))
+		backend.get_calibration_snapshot(args.calibration_set_id))
 	coupling_graph = to_jsonable(
-		qpm.get_coupling_graph(args.calibration_set_id))
+		backend.get_coupling_graph(args.calibration_set_id))
 	qschedsim_skeleton = build_qschedsim_skeleton(
 		device_snapshot,
 		coupling_graph,
@@ -136,7 +138,7 @@ def main() -> int:
 		for name, path in summary["files"].items():
 			print(f"{name}: {path}")
 
-	return finish(0)
+	return backend.finish(0)
 
 
 if __name__ == "__main__":
