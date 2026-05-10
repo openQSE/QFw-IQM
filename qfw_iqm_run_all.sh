@@ -9,4 +9,4 @@ qfw_iqm_init "$@"
 qfw_iqm_run_suite_json \
 	"scripts/iqm_env_check.py" \
 	"scripts/iqm_discover.py" \
-	"scripts/iqm_submit_smoke_qasm.py"
+	"scripts/iqm_submit_smoke.py"
