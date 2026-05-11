@@ -69,9 +69,21 @@ To run the current suite in one QFw session:
 ./qfw_iqm_run_all.sh
 ```
 
-`qfw_iqm_run_all.sh` intentionally does not include timing campaigns. Timing
-scripts submit multiple jobs and should be run explicitly with the desired
-shot sweep, batch sweep, and repetition count.
+`qfw_iqm_run_all.sh` includes the environment check, discovery capture, smoke
+submission, and a short single-qubit timing sanity sweep. The timing sweep is
+kept intentionally small so that `run_all` remains safe for routine validation.
+The default 1Q timing settings can be changed with:
+
+```bash
+export QFW_IQM_RUN_ALL_1Q_QUBITS=QB1
+export QFW_IQM_RUN_ALL_1Q_GATES=rx
+export QFW_IQM_RUN_ALL_1Q_DEPTHS=1,2
+export QFW_IQM_RUN_ALL_1Q_SHOTS=100
+export QFW_IQM_RUN_ALL_1Q_REPETITIONS=1
+```
+
+Larger timing campaigns should still be run explicitly with the desired shot
+sweep, batch sweep, depth sweep, qubit list, and repetition count.
 
 Output is written under:
 

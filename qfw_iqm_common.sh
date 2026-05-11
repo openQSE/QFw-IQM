@@ -74,21 +74,35 @@ qfw_iqm_run_single() {
 		"${QFW_IQM_REPO_DIR}/${script}" "$@")
 }
 
+qfw_iqm_run_python_json() {
+	local script="$1"
+	shift
+
+	python3 "${QFW_IQM_REPO_DIR}/${script}" \
+		"${QFW_IQM_BACKEND_ARGS[@]}" "$@" --json
+}
+
+qfw_iqm_run_qfw_json() {
+	local script="$1"
+	shift
+
+	(cd "${QFW_PATH}" && qfw_srun.sh \
+		"${QFW_IQM_REPO_DIR}/${script}" \
+		"${QFW_IQM_BACKEND_ARGS[@]}" "$@" --json)
+}
+
 qfw_iqm_run_suite_json() {
 	local script
 
 	if qfw_iqm_use_direct_backend; then
 		for script in "$@"; do
-			python3 "${QFW_IQM_REPO_DIR}/${script}" \
-				"${QFW_IQM_BACKEND_ARGS[@]}" --json
+			qfw_iqm_run_python_json "${script}"
 		done
 		return 0
 	fi
 
 	qfw_iqm_start_qfw
 	for script in "$@"; do
-		(cd "${QFW_PATH}" && qfw_srun.sh \
-			"${QFW_IQM_REPO_DIR}/${script}" \
-			"${QFW_IQM_BACKEND_ARGS[@]}" --json)
+		qfw_iqm_run_qfw_json "${script}"
 	done
 }
