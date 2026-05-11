@@ -50,6 +50,7 @@ one Python script through `qfw_srun.sh`, and tears QFw down.
 ./qfw_iqm_discover.sh --json
 ./qfw_iqm_submit_smoke.sh --shots 100 --json
 ./qfw_iqm_timing_overhead.sh --shots-sweep 1,10,100 --batch-sweep 1,2 --json
+./qfw_iqm_timing_1q.sh --qubits QB1,QB2 --gates rx,ry --depths 1,2,4 --json
 ```
 
 To force direct mode:
@@ -59,6 +60,7 @@ To force direct mode:
 ./qfw_iqm_discover.sh --backend direct --json
 ./qfw_iqm_submit_smoke.sh --backend direct --shots 100 --json
 ./qfw_iqm_timing_overhead.sh --backend direct --shots-sweep 1,10,100 --json
+./qfw_iqm_timing_1q.sh --backend direct --qubits QB1 --gates rx --json
 ```
 
 To run the current suite in one QFw session:
@@ -171,6 +173,40 @@ Typical use:
 ./qfw_iqm_timing_overhead.sh \
     --shots-sweep 1,10,100 \
     --batch-sweep 1,2 \
+    --repetitions 3 \
+    --json
+```
+
+### `scripts/iqm_timing_1q.py`
+
+`iqm_timing_1q.py` implements the single-qubit gate duration test from the
+characterization plan. It uses Qiskit to author one-qubit circuits, repeats a
+selected gate at each requested depth, maps logical qubit 0 to the requested
+physical IQM qubit, submits the serialized circuit through the common backend
+path, and records timing data for each run.
+
+The supported gate probes are `x`, `rx`, and `ry`. On IQM hardware these probe
+the native PRX family through different Qiskit source gates and phases. The
+default gate set is `rx,ry`, the default depth sweep is
+`1,2,4,8,16,32,64,128`, and the default qubit set is `all` active qubits
+reported by the backend. Use `--angle` to change the RX/RY angle, `--shots` to
+set the shot count, and `--repetitions` to repeat each qubit/gate/depth point.
+
+For each point, the script writes the generated QASM artifact, the raw result
+payload, and a JSON-lines timing record. The summary file includes linear fits
+against depth for each gate/qubit pair and for each gate across all selected
+qubits. The most useful fit for a hardware timing model is usually
+`execution_per_shot_seconds`, because it divides the reported execution time by
+the shot count before fitting depth.
+
+Typical use:
+
+```bash
+./qfw_iqm_timing_1q.sh \
+    --qubits QB1,QB2 \
+    --gates rx,ry \
+    --depths 1,2,4,8,16 \
+    --shots 100 \
     --repetitions 3 \
     --json
 ```
