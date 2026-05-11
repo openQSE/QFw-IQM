@@ -4,14 +4,19 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qfw_iqm_util.backend import add_backend_argument, get_backend
-from qfw_iqm_util.output import create_run_paths, to_jsonable, write_json
+from qfw_iqm_util.output import create_run_paths
+from qfw_iqm_util.output import render_json_output
+from qfw_iqm_util.output import render_text_output
+from qfw_iqm_util.output import script_output_path
+from qfw_iqm_util.output import to_jsonable
+from qfw_iqm_util.output import write_json
+from qfw_iqm_util.output import write_script_output
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,17 +67,23 @@ def main() -> int:
 		"couplers": len(coupling_graph.get("couplers", [])),
 		"calibration_set_id": coupling_graph.get("calibration_set_id"),
 	}
+	summary["files"]["script_output"] = str(
+		script_output_path(paths, args.json))
 
 	if args.json:
-		print(json.dumps(summary, indent=2, sort_keys=True))
+		output = render_json_output(summary)
 	else:
-		print(f"run id: {summary['run_id']}")
-		print(f"output dir: {summary['output_dir']}")
-		print(f"qubits: {summary['qubits']}")
-		print(f"couplers: {summary['couplers']}")
-		print(f"calibration set: {summary['calibration_set_id']}")
+		lines = [
+			f"run id: {summary['run_id']}",
+			f"output dir: {summary['output_dir']}",
+			f"qubits: {summary['qubits']}",
+			f"couplers: {summary['couplers']}",
+			f"calibration set: {summary['calibration_set_id']}",
+		]
 		for name, path in summary["files"].items():
-			print(f"{name}: {path}")
+			lines.append(f"{name}: {path}")
+		output = render_text_output(lines)
+	write_script_output(paths, output, args.json)
 
 	return backend.finish(0)
 

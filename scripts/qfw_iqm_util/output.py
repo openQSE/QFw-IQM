@@ -43,6 +43,27 @@ def write_json(path: Path, data: Any) -> None:
 	path.write_text(json.dumps(to_jsonable(data), indent=2, sort_keys=True))
 
 
+def script_output_path(paths: RunPaths, json_mode: bool) -> Path:
+	name = "stdout.json" if json_mode else "stdout.txt"
+	return paths.results / name
+
+
+def render_json_output(data: Any) -> str:
+	return json.dumps(to_jsonable(data), indent=2, sort_keys=True)
+
+
+def render_text_output(lines: list[str]) -> str:
+	return "\n".join(lines)
+
+
+def write_script_output(paths: RunPaths, data: str, json_mode: bool) -> Path:
+	path = script_output_path(paths, json_mode)
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(data if data.endswith("\n") else f"{data}\n")
+	print(f"script output: {path}")
+	return path
+
+
 def create_run_paths(script_file: str,
 		     output_dir: Path | None = None,
 		     run_id: str | None = None) -> RunPaths:
@@ -70,4 +91,3 @@ def create_run_paths(script_file: str,
 		run_id=run_id,
 		timestamp_utc=now.isoformat(),
 	)
-

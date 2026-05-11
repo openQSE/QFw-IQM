@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -12,7 +11,13 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qfw_iqm_util.backend import add_backend_argument, get_backend
-from qfw_iqm_util.output import create_run_paths, to_jsonable, write_json
+from qfw_iqm_util.output import create_run_paths
+from qfw_iqm_util.output import render_json_output
+from qfw_iqm_util.output import render_text_output
+from qfw_iqm_util.output import script_output_path
+from qfw_iqm_util.output import to_jsonable
+from qfw_iqm_util.output import write_json
+from qfw_iqm_util.output import write_script_output
 
 
 def summarize_backend(info: dict[str, Any]) -> dict[str, Any]:
@@ -56,16 +61,20 @@ def main() -> int:
 	output_file = paths.root / "env_check.json"
 	write_json(output_file, result)
 	result["output_file"] = str(output_file)
+	result["script_output_file"] = str(script_output_path(paths, args.json))
 
 	if args.json:
-		print(json.dumps(result, indent=2, sort_keys=True))
+		output = render_json_output(result)
 	else:
 		summary = result["summary"]
-		print(f"backend: {summary['backend']}")
-		print(f"machine: {summary['name']}")
-		print(f"active qubits: {len(summary['active_qubits'])}")
-		print(f"calibration set: {summary['calibration_set_id']}")
-		print(f"output: {output_file}")
+		output = render_text_output([
+			f"backend: {summary['backend']}",
+			f"machine: {summary['name']}",
+			f"active qubits: {len(summary['active_qubits'])}",
+			f"calibration set: {summary['calibration_set_id']}",
+			f"output: {output_file}",
+		])
+	write_script_output(paths, output, args.json)
 
 	return backend.finish(0)
 

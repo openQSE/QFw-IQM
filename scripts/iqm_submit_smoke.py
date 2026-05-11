@@ -4,14 +4,19 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qfw_iqm_util.backend import add_backend_argument, get_backend
-from qfw_iqm_util.output import create_run_paths, to_jsonable, write_json
+from qfw_iqm_util.output import create_run_paths
+from qfw_iqm_util.output import render_json_output
+from qfw_iqm_util.output import render_text_output
+from qfw_iqm_util.output import script_output_path
+from qfw_iqm_util.output import to_jsonable
+from qfw_iqm_util.output import write_json
+from qfw_iqm_util.output import write_script_output
 from qfw_iqm_util.qiskit_exec import write_qasm2_artifact
 
 
@@ -101,16 +106,22 @@ def main() -> int:
 			"timing_summary": str(timing_file),
 		},
 	}
+	summary["files"]["script_output"] = str(
+		script_output_path(paths, args.json))
 
 	if args.json:
-		print(json.dumps(summary, indent=2, sort_keys=True))
+		output = render_json_output(summary)
 	else:
-		print(f"run id: {summary['run_id']}")
-		print(f"output dir: {summary['output_dir']}")
-		print(f"job id: {summary['job_id']}")
-		print(f"counts: {summary['counts']}")
+		lines = [
+			f"run id: {summary['run_id']}",
+			f"output dir: {summary['output_dir']}",
+			f"job id: {summary['job_id']}",
+			f"counts: {summary['counts']}",
+		]
 		for name, path in summary["files"].items():
-			print(f"{name}: {path}")
+			lines.append(f"{name}: {path}")
+		output = render_text_output(lines)
+	write_script_output(paths, output, args.json)
 
 	return backend.finish(0 if summary["ok"] else 2)
 

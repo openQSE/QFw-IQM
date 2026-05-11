@@ -14,7 +14,13 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qfw_iqm_util.backend import add_backend_argument, get_backend
-from qfw_iqm_util.output import create_run_paths, to_jsonable, write_json
+from qfw_iqm_util.output import create_run_paths
+from qfw_iqm_util.output import render_json_output
+from qfw_iqm_util.output import render_text_output
+from qfw_iqm_util.output import script_output_path
+from qfw_iqm_util.output import to_jsonable
+from qfw_iqm_util.output import write_json
+from qfw_iqm_util.output import write_script_output
 
 
 def parse_int_list(value: str) -> list[int]:
@@ -373,18 +379,24 @@ def main() -> int:
 			"timing_summary": str(summary_file),
 		},
 	}
+	summary["files"]["script_output"] = str(
+		script_output_path(paths, args.json))
 	write_json(summary_file, summary)
 
 	if args.json:
-		print(json.dumps(to_jsonable(summary), indent=2, sort_keys=True))
+		output = render_json_output(summary)
 	else:
-		print(f"run id: {summary['run_id']}")
-		print(f"output dir: {summary['output_dir']}")
-		print(f"backend: {summary['backend_mode']}")
-		print(f"records: {summary['record_count']}")
-		print(f"failed records: {summary['failed_record_count']}")
+		lines = [
+			f"run id: {summary['run_id']}",
+			f"output dir: {summary['output_dir']}",
+			f"backend: {summary['backend_mode']}",
+			f"records: {summary['record_count']}",
+			f"failed records: {summary['failed_record_count']}",
+		]
 		for name, path in summary["files"].items():
-			print(f"{name}: {path}")
+			lines.append(f"{name}: {path}")
+		output = render_text_output(lines)
+	write_script_output(paths, output, args.json)
 
 	rc = 0 if summary["ok"] else 2
 	return rc if args.dry_run else backend.finish(rc)

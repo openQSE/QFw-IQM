@@ -91,6 +91,11 @@ Output is written under:
 data/raw/<YYYYMMDD>/<script-name>/<HHMMSS>/
 ```
 
+Each workflow writes its terminal summary to the run's `results/` directory.
+With `--json`, the summary is stored in `results/stdout.json`. Without
+`--json`, the text summary is stored in `results/stdout.txt`. The terminal only
+prints the path to that saved output file.
+
 The `data/` directory is intentionally ignored by git.
 
 ## Script Reference
