@@ -210,11 +210,24 @@ reported by the backend. Use `--angle` to change the RX/RY angle, `--shots` to
 set the shot count, and `--repetitions` to repeat each qubit/gate/depth point.
 
 For each point, the script writes the generated QASM artifact, the raw result
-payload, and a JSON-lines timing record. The summary file includes linear fits
-against depth for each gate/qubit pair and for each gate across all selected
-qubits. The most useful fit for a hardware timing model is usually
-`execution_per_shot_seconds`, because it divides the reported execution time by
-the shot count before fitting depth.
+payload, and a JSON-lines timing record. The post-processing step then writes
+`results/analysis.json`, `results/analysis.md`, and plots under
+`results/plots/`. The analysis explains whether IQM-reported execution time
+per shot appears to increase linearly as repeated 1Q gate depth increases.
+
+The primary hardware metric is `execution_per_shot_seconds`. It uses the IQM
+timeline interval from `execution_started` to `execution_ended`, divided by the
+shot count. Wall-time fields such as `script_wall_seconds`,
+`client_total_seconds`, and `server_total_seconds` are recorded only as
+diagnostics because they include client, service, queueing, and orchestration
+overhead.
+
+The generated plots show depth on the x-axis and IQM execution time per shot on
+the y-axis. The default plot set includes one plot per gate across all selected
+physical qubits, one plot per physical qubit across all selected gates,
+fit-residual plots per gate, and a heatmap of fitted slope by gate and qubit.
+If `matplotlib` is not installed, the script still completes and records that
+plot generation was skipped in the analysis files.
 
 Typical use:
 

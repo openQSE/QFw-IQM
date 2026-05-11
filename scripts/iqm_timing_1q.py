@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import statistics
 import sys
 import time
@@ -25,6 +26,12 @@ from qfw_iqm_util.output import write_script_output
 from qfw_iqm_util.qiskit_exec import write_qasm2_artifact
 
 SUPPORTED_GATES = ("x", "rx", "ry")
+PRIMARY_METRIC = "execution_per_shot_seconds"
+DIAGNOSTIC_METRICS = (
+	"script_wall_seconds",
+	"client_total_seconds",
+	"server_total_seconds",
+)
 
 
 def parse_int_list(value: str) -> list[int]:
@@ -255,6 +262,395 @@ def build_fits(records: list[dict[str, Any]]) -> dict[str, Any]:
 	return fits
 
 
+def metric_points(records: list[dict[str, Any]],
+		  metric: str = PRIMARY_METRIC) -> list[tuple[float, float]]:
+	points = []
+	for record in records:
+		if not record.get("ok"):
+			continue
+		value = safe_float(record.get("metrics", {}).get(metric))
+		if value is None:
+			continue
+		points.append((float(record["depth"]), value))
+	return sorted(points)
+
+
+def classify_fit(fit: dict[str, Any] | None) -> dict[str, Any]:
+	if not fit:
+		return {
+			"status": "insufficient_data",
+			"conclusion": (
+				"Fewer than two successful records contain IQM execution "
+				"timing, so this group cannot answer the depth-scaling "
+				"question."),
+		}
+
+	depth_span = fit["depth_max"] - fit["depth_min"]
+	predicted_delta = fit["slope_seconds_per_gate"] * depth_span
+	mean = max(abs(fit["y_mean"]), 1e-15)
+	delta_fraction = abs(predicted_delta) / mean
+	rms = fit["rms_residual_seconds"]
+	residual_reference = max(abs(predicted_delta), mean, 1e-15)
+	residual_fraction = rms / residual_reference
+
+	if delta_fraction < 0.05:
+		status = "no_depth_dependence_observed"
+		conclusion = (
+			"The IQM execution-time data does not show a clear "
+			"depth-dependent increase for this group. That can happen if "
+			"the timing telemetry is too coarse for this circuit family, "
+			"if the compiler optimized the repeated gates, or if the "
+			"tested depths are too small.")
+	elif fit["slope_seconds_per_gate"] > 0 and residual_fraction <= 0.2:
+		status = "approximately_linear_positive"
+		conclusion = (
+			"IQM execution time per shot increases approximately linearly "
+			"with repeated 1Q gate depth for this group.")
+	elif fit["slope_seconds_per_gate"] > 0:
+		status = "positive_but_noisy"
+		conclusion = (
+			"IQM execution time per shot increases with depth, but the "
+			"linear fit residuals are large enough that repeated runs or "
+			"deeper circuits are needed before using the slope as a stable "
+			"gate-duration estimate.")
+	else:
+		status = "not_linear_positive"
+		conclusion = (
+			"The fitted slope is not positive, so this run does not support "
+			"a linear per-gate timing model for this group.")
+
+	return {
+		"status": status,
+		"conclusion": conclusion,
+		"predicted_delta_seconds": predicted_delta,
+		"delta_fraction_of_mean": delta_fraction,
+		"residual_fraction": residual_fraction,
+	}
+
+
+def analyze_group(records: list[dict[str, Any]]) -> dict[str, Any]:
+	points = metric_points(records, PRIMARY_METRIC)
+	fit = linear_fit(points)
+	classification = classify_fit(fit)
+	return {
+		"record_count": len(records),
+		"valid_primary_metric_count": len(points),
+		"depths": sorted({record["depth"] for record in records}),
+		"fit": fit,
+		"classification": classification,
+	}
+
+
+def group_records(records: list[dict[str, Any]], key: str) -> dict[str, list[dict[str, Any]]]:
+	grouped: dict[str, list[dict[str, Any]]] = {}
+	for record in records:
+		if not record.get("ok"):
+			continue
+		if key == "gate":
+			group = record["gate"]
+		elif key == "physical_qubit":
+			group = record["physical_qubit"]
+		elif key == "gate_qubit":
+			group = f"{record['gate']}:{record['physical_qubit']}"
+		else:
+			raise ValueError(f"unsupported group key {key!r}")
+		grouped.setdefault(group, []).append(record)
+	return grouped
+
+
+def build_analysis(records: list[dict[str, Any]],
+		   config: dict[str, Any],
+		   plots: dict[str, Any]) -> dict[str, Any]:
+	by_gate_qubit = {
+		key: analyze_group(group)
+		for key, group in sorted(group_records(records, "gate_qubit").items())
+	}
+	by_gate = {
+		key: analyze_group(group)
+		for key, group in sorted(group_records(records, "gate").items())
+	}
+	by_qubit = {
+		key: analyze_group(group)
+		for key, group in sorted(group_records(records, "physical_qubit").items())
+	}
+	valid_count = sum(
+		1 for record in records
+		if record.get("ok")
+		and safe_float(record.get("metrics", {}).get(PRIMARY_METRIC)) is not None)
+	status_counts: dict[str, int] = {}
+	for item in by_gate_qubit.values():
+		status = item["classification"]["status"]
+		status_counts[status] = status_counts.get(status, 0) + 1
+
+	if valid_count == 0:
+		overall_status = "no_iqm_execution_timing"
+		overall_conclusion = (
+			"No successful record contained IQM execution timing. This run "
+			"cannot answer whether execution time scales with repeated 1Q "
+			"gate depth.")
+	elif status_counts.get("approximately_linear_positive", 0):
+		overall_status = "depth_scaling_observed"
+		overall_conclusion = (
+			"At least one gate/qubit group shows approximately linear "
+			"increase in IQM execution time per shot as repeated 1Q gate "
+			"depth increases.")
+	else:
+		overall_status = "depth_scaling_not_established"
+		overall_conclusion = (
+			"This run did not establish a clean positive linear "
+			"depth-scaling trend in the IQM execution-time metric.")
+
+	return {
+		"schema": "qfw-iqm-1q-analysis-v1",
+		"intent": (
+			"Determine whether IQM execution time increases linearly as "
+			"more gates of the same 1Q type are added to a one-qubit "
+			"circuit."),
+		"primary_metric": PRIMARY_METRIC,
+		"primary_metric_definition": (
+			"IQM timeline execution duration divided by shots. The "
+			"execution duration is the interval from execution_started to "
+			"execution_ended in the IQM job timeline."),
+		"diagnostic_metrics_not_used_for_hardware_conclusion": list(
+			DIAGNOSTIC_METRICS),
+		"config": config,
+		"record_count": len(records),
+		"successful_record_count": sum(
+			1 for record in records if record.get("ok")),
+		"valid_primary_metric_count": valid_count,
+		"failed_record_count": sum(
+			1 for record in records if not record.get("ok")),
+		"overall": {
+			"status": overall_status,
+			"conclusion": overall_conclusion,
+			"gate_qubit_status_counts": status_counts,
+		},
+		"by_gate_qubit": by_gate_qubit,
+		"by_gate": by_gate,
+		"by_qubit": by_qubit,
+		"plots": plots,
+		"caveats": [
+			"Repeated gates can be simplified or transformed by compilation.",
+			"Client wall time and server total time include non-hardware "
+			"overheads and are not used for the primary hardware timing "
+			"conclusion.",
+			"Small depth sweeps may be below the resolution needed to infer "
+			"a stable per-gate timing slope.",
+		],
+	}
+
+
+def plot_records(records: list[dict[str, Any]],
+		 plots_dir: Path) -> dict[str, Any]:
+	valid = [
+		record for record in records
+		if record.get("ok")
+		and safe_float(record.get("metrics", {}).get(PRIMARY_METRIC)) is not None
+	]
+	if not valid:
+		return {
+			"status": "skipped",
+			"reason": "no successful records with IQM execution timing",
+			"files": [],
+		}
+
+	plots_dir.mkdir(parents=True, exist_ok=True)
+	mpl_config_dir = plots_dir / ".matplotlib"
+	mpl_config_dir.mkdir(parents=True, exist_ok=True)
+	os.environ.setdefault("MPLCONFIGDIR", str(mpl_config_dir))
+
+	try:
+		import matplotlib
+		matplotlib.use("Agg")
+		import matplotlib.pyplot as plt
+	except Exception as exc:
+		return {
+			"status": "skipped",
+			"reason": f"matplotlib unavailable: {exc}",
+			"files": [],
+		}
+
+	files = []
+
+	def y(record):
+		return safe_float(record["metrics"].get(PRIMARY_METRIC))
+
+	def write_plot(name: str):
+		path = plots_dir / name
+		plt.tight_layout()
+		plt.savefig(path, dpi=150)
+		plt.close()
+		files.append(str(path))
+
+	for gate, group in sorted(group_records(valid, "gate").items()):
+		plt.figure(figsize=(8, 5))
+		for qubit, qubit_records in sorted(group_records(
+				group, "physical_qubit").items()):
+			points = sorted((record["depth"], y(record))
+					for record in qubit_records)
+			xs = [point[0] for point in points]
+			ys = [point[1] for point in points]
+			plt.plot(xs, ys, marker="o", label=qubit)
+		plt.xlabel("Repeated gate depth")
+		plt.ylabel("IQM execution time per shot (s)")
+		plt.title(f"1Q {gate} timing by physical qubit")
+		plt.xscale("log", base=2)
+		plt.grid(True, which="both", alpha=0.3)
+		if len(set(record["physical_qubit"] for record in group)) <= 12:
+			plt.legend(fontsize="small")
+		write_plot(f"1q_{gate}_all_qubits_execution_per_shot.png")
+
+	for qubit, group in sorted(group_records(valid, "physical_qubit").items()):
+		plt.figure(figsize=(8, 5))
+		for gate, gate_records in sorted(group_records(group, "gate").items()):
+			points = sorted((record["depth"], y(record))
+					for record in gate_records)
+			xs = [point[0] for point in points]
+			ys = [point[1] for point in points]
+			plt.plot(xs, ys, marker="o", label=gate)
+		plt.xlabel("Repeated gate depth")
+		plt.ylabel("IQM execution time per shot (s)")
+		plt.title(f"1Q timing on {qubit}")
+		plt.xscale("log", base=2)
+		plt.grid(True, which="both", alpha=0.3)
+		plt.legend(fontsize="small")
+		write_plot(f"1q_{qubit}_all_gates_execution_per_shot.png")
+
+	for gate, group in sorted(group_records(valid, "gate").items()):
+		plt.figure(figsize=(8, 5))
+		for qubit, qubit_records in sorted(group_records(
+				group, "physical_qubit").items()):
+			points = metric_points(qubit_records, PRIMARY_METRIC)
+			fit = linear_fit(points)
+			if not fit:
+				continue
+			residuals = [
+				(depth, value - (
+					fit["intercept_seconds"]
+					+ fit["slope_seconds_per_gate"] * depth))
+				for depth, value in points
+			]
+			plt.plot(
+				[point[0] for point in residuals],
+				[point[1] for point in residuals],
+				marker="o",
+				label=qubit)
+		plt.axhline(0, color="black", linewidth=1)
+		plt.xlabel("Repeated gate depth")
+		plt.ylabel("Residual execution time per shot (s)")
+		plt.title(f"1Q {gate} fit residuals")
+		plt.xscale("log", base=2)
+		plt.grid(True, which="both", alpha=0.3)
+		if len(set(record["physical_qubit"] for record in group)) <= 12:
+			plt.legend(fontsize="small")
+		write_plot(f"1q_{gate}_fit_residuals.png")
+
+	slope_rows = []
+	gates = sorted({record["gate"] for record in valid})
+	qubits = sorted({record["physical_qubit"] for record in valid})
+	for gate in gates:
+		row = []
+		for qubit in qubits:
+			group = [
+				record for record in valid
+				if record["gate"] == gate
+				and record["physical_qubit"] == qubit
+			]
+			fit = linear_fit(metric_points(group, PRIMARY_METRIC))
+			row.append(
+				fit["slope_seconds_per_gate"] if fit is not None else math.nan)
+		slope_rows.append(row)
+	if slope_rows and qubits:
+		plt.figure(figsize=(max(8, len(qubits) * 0.35), max(3, len(gates) * 0.8)))
+		image = plt.imshow(slope_rows, aspect="auto")
+		plt.colorbar(image, label="Slope (s/gate/shot)")
+		plt.xticks(range(len(qubits)), qubits, rotation=90)
+		plt.yticks(range(len(gates)), gates)
+		plt.title("1Q fitted execution-time slope")
+		write_plot("1q_gate_slope_heatmap.png")
+
+	return {
+		"status": "generated",
+		"metric": PRIMARY_METRIC,
+		"files": files,
+	}
+
+
+def render_analysis_markdown(analysis: dict[str, Any]) -> str:
+	lines = [
+		"# IQM 1Q Timing Analysis",
+		"",
+		"## Intent",
+		"",
+		analysis["intent"],
+		"",
+		"## Primary Metric",
+		"",
+		f"`{analysis['primary_metric']}` is used for the hardware timing "
+		"conclusion.",
+		"",
+		analysis["primary_metric_definition"],
+		"",
+		"The following diagnostic metrics are recorded but are not used for "
+		"the hardware conclusion:",
+		"",
+	]
+	for metric in analysis["diagnostic_metrics_not_used_for_hardware_conclusion"]:
+		lines.append(f"- `{metric}`")
+
+	lines += [
+		"",
+		"## Overall Result",
+		"",
+		f"Status: `{analysis['overall']['status']}`",
+		"",
+		analysis["overall"]["conclusion"],
+		"",
+		f"Records: {analysis['record_count']}",
+		f"Successful records: {analysis['successful_record_count']}",
+		f"Records with IQM execution timing: "
+		f"{analysis['valid_primary_metric_count']}",
+		f"Failed records: {analysis['failed_record_count']}",
+		"",
+		"## Gate/Qubit Fits",
+		"",
+		"| Gate/Qubit | Status | Points | Slope (s/gate/shot) | RMS residual (s) | Conclusion |",
+		"| --- | --- | ---: | ---: | ---: | --- |",
+	]
+	for key, item in analysis["by_gate_qubit"].items():
+		fit = item.get("fit") or {}
+		classification = item["classification"]
+		lines.append(
+			f"| `{key}` | `{classification['status']}` | "
+			f"{item['valid_primary_metric_count']} | "
+			f"{fit.get('slope_seconds_per_gate', '')} | "
+			f"{fit.get('rms_residual_seconds', '')} | "
+			f"{classification['conclusion']} |")
+
+	lines += [
+		"",
+		"## Plots",
+		"",
+	]
+	plots = analysis.get("plots", {})
+	if plots.get("status") == "generated":
+		for path in plots.get("files", []):
+			lines.append(f"- `{path}`")
+	else:
+		lines.append(
+			f"Plot generation was skipped: {plots.get('reason', 'unknown')}")
+
+	lines += [
+		"",
+		"## Caveats",
+		"",
+	]
+	for caveat in analysis["caveats"]:
+		lines.append(f"- {caveat}")
+
+	return "\n".join(lines) + "\n"
+
+
 def run_case(backend, info: dict[str, Any], dry_run: bool):
 	if dry_run:
 		return {
@@ -323,6 +719,9 @@ def main() -> int:
 	backend_info_file = paths.root / "backend_info.json"
 	records_file = paths.results / "timing_records.jsonl"
 	summary_file = paths.results / "timing_summary.json"
+	analysis_file = paths.results / "analysis.json"
+	analysis_md_file = paths.results / "analysis.md"
+	plots_dir = paths.results / "plots"
 	write_json(backend_info_file, backend_info)
 
 	records = []
@@ -383,6 +782,22 @@ def main() -> int:
 					})
 
 	write_jsonl(records_file, records)
+	config = {
+		"qubits": qubits,
+		"gates": args.gates,
+		"native_gate_model": "x/rx/ry Qiskit gates probe IQM PRX",
+		"depths": args.depths,
+		"shots": args.shots,
+		"repetitions": args.repetitions,
+		"angle_radians": args.angle,
+		"calibration_set_id": args.calibration_set_id,
+	}
+	fits = build_fits(records)
+	plots = plot_records(records, plots_dir)
+	analysis = build_analysis(records, config, plots)
+	write_json(analysis_file, analysis)
+	analysis_md_file.write_text(render_analysis_markdown(analysis))
+
 	summary = {
 		"ok": all(record["ok"] for record in records),
 		"run_id": paths.run_id,
@@ -390,24 +805,24 @@ def main() -> int:
 		"output_dir": str(paths.root),
 		"backend_mode": args.backend if args.dry_run else backend.name,
 		"dry_run": args.dry_run,
-		"config": {
-			"qubits": qubits,
-			"gates": args.gates,
-			"native_gate_model": "x/rx/ry Qiskit gates probe IQM PRX",
-			"depths": args.depths,
-			"shots": args.shots,
-			"repetitions": args.repetitions,
-			"angle_radians": args.angle,
-			"calibration_set_id": args.calibration_set_id,
-		},
+		"config": config,
 		"record_count": len(records),
 		"failed_record_count": sum(
 			1 for record in records if not record["ok"]),
-		"fits": build_fits(records),
+		"fits": fits,
+		"analysis": {
+			"status": analysis["overall"]["status"],
+			"conclusion": analysis["overall"]["conclusion"],
+			"primary_metric": analysis["primary_metric"],
+			"plots": plots,
+		},
 		"files": {
 			"backend_info": str(backend_info_file),
 			"timing_records": str(records_file),
 			"timing_summary": str(summary_file),
+			"analysis_json": str(analysis_file),
+			"analysis_markdown": str(analysis_md_file),
+			"plots": str(plots_dir),
 		},
 	}
 	summary["files"]["script_output"] = str(
