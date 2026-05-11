@@ -7,67 +7,11 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qfw_iqm_util.backend import add_backend_argument, get_backend
 from qfw_iqm_util.output import create_run_paths, to_jsonable, write_json
-
-
-def summarize_native_gates(dynamic_info: dict[str, Any]) -> list[dict[str, Any]]:
-	dynamic = dynamic_info.get("dynamic_architecture", {})
-	gates = dynamic.get("gates", {})
-	if not isinstance(gates, dict):
-		return []
-
-	summary = []
-	for name, gate_info in sorted(gates.items()):
-		implementations = []
-		if isinstance(gate_info, dict):
-			impls = gate_info.get("implementations", {})
-			if isinstance(impls, dict):
-				implementations = sorted(str(key) for key in impls.keys())
-		summary.append({
-			"name": str(name),
-			"implementations": implementations,
-		})
-	return summary
-
-
-def build_qschedsim_skeleton(device_snapshot: dict[str, Any],
-			     coupling_graph: dict[str, Any],
-			     calibration_snapshot: dict[str, Any]) -> dict[str, Any]:
-	backend_info = device_snapshot.get("backend_info", {})
-	static_arch = backend_info.get("static_architecture", {})
-	dynamic_info = device_snapshot.get("dynamic_backend_info", {})
-	return {
-		"schema": "qschedsim-device-skeleton-v1",
-		"name": static_arch.get("dut_label") or static_arch.get("name")
-		or "iqm-device",
-		"source": {
-			"tool": "QFw-IQM/scripts/iqm_discover.py",
-			"calibration_set_id": coupling_graph.get("calibration_set_id"),
-		},
-		"hardware": {
-			"vendor": "IQM",
-			"technology": "superconducting",
-			"qubit_count": len(coupling_graph.get("qubits", [])),
-			"qubits": coupling_graph.get("qubits", []),
-			"coupling_graph": coupling_graph.get("couplers", []),
-			"native_gates": summarize_native_gates(dynamic_info),
-		},
-		"admission_model": {
-			"status": "unmeasured",
-		},
-		"timing_model": {
-			"status": "unmeasured",
-		},
-		"noise_model": {
-			"status": "raw-calibration-recorded",
-			"calibration_snapshot": calibration_snapshot,
-		},
-	}
 
 
 def parse_args() -> argparse.Namespace:
@@ -98,23 +42,15 @@ def main() -> int:
 		backend.get_calibration_snapshot(args.calibration_set_id))
 	coupling_graph = to_jsonable(
 		backend.get_coupling_graph(args.calibration_set_id))
-	qschedsim_skeleton = build_qschedsim_skeleton(
-		device_snapshot,
-		coupling_graph,
-		calibration_snapshot,
-	)
 
 	files = {
 		"device_snapshot": paths.root / "device_snapshot.json",
 		"calibration_snapshot": paths.root / "calibration_snapshot.json",
 		"coupling_graph": paths.root / "coupling_graph.json",
-		"qschedsim_device_skeleton": (
-			paths.root / "qschedsim_device_skeleton.json"),
 	}
 	write_json(files["device_snapshot"], device_snapshot)
 	write_json(files["calibration_snapshot"], calibration_snapshot)
 	write_json(files["coupling_graph"], coupling_graph)
-	write_json(files["qschedsim_device_skeleton"], qschedsim_skeleton)
 
 	summary = {
 		"ok": True,
