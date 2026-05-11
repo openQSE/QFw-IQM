@@ -79,6 +79,157 @@ data/raw/<YYYYMMDD>/<script-name>/<HHMMSS>/
 
 The `data/` directory is intentionally ignored by git.
 
+## Script Reference
+
+The top-level Python files under `scripts/` are the workflow entry points.
+They all support `--backend auto|qfw|direct`, `--output-dir`, `--run-id`,
+and `--json`. Scripts that contact the machine also support
+`--system-up-timeout`; scripts that query or submit against a specific
+calibration can use `--calibration-set-id`.
+
+### `scripts/iqm_env_check.py`
+
+`iqm_env_check.py` is the first connectivity and metadata check. It selects
+the requested backend, asks the backend for static and dynamic device
+information, and writes a single `env_check.json` file. The output includes
+the backend mode that was used, static architecture data, dynamic architecture
+data, active qubits, the selected calibration set, and a compact summary for
+quick terminal inspection.
+
+Use this script before running characterization jobs. A successful run shows
+that the local test environment can reach the IQM backend and that the backend
+can return basic machine metadata. It does not submit a quantum job.
+
+Typical use:
+
+```bash
+./qfw_iqm_env_check.sh --json
+./qfw_iqm_env_check.sh --backend direct --json
+```
+
+### `scripts/iqm_discover.py`
+
+`iqm_discover.py` captures the machine description needed for later
+characterization and reporting. It collects backend metadata, dynamic
+architecture metadata, the calibration snapshot, the quality metric snapshot,
+and the coupling graph. The script writes `device_snapshot.json`,
+`calibration_snapshot.json`, and `coupling_graph.json`.
+
+The coupling graph is derived from the device architecture and dynamic gate
+loci. This makes the output useful even when the provider API does not expose a
+single direct `couplers` field. The script intentionally does not submit a
+quantum job, and it no longer writes a qSchedSim skeleton file. Its job is to
+record the raw discovery artifacts that other tools or reports can consume.
+
+Typical use:
+
+```bash
+./qfw_iqm_discover.sh --json
+./qfw_iqm_discover.sh --calibration-set-id <uuid> --json
+```
+
+### `scripts/iqm_submit_smoke.py`
+
+`iqm_submit_smoke.py` is the preferred operational smoke test. It builds a
+one-qubit Qiskit circuit, optionally applies an `X` gate with `--flip`, measures
+the qubit, submits the circuit through the selected backend, and records the
+result. The script writes the input description, a QASM artifact generated from
+the Qiskit circuit, the backend result payload, and a timing summary when timing
+metadata is available.
+
+The default circuit measures the initial `|0>` state. With `--flip`, it
+measures a prepared `|1>` state instead. This provides a minimal end-to-end
+check that circuit construction, submission, execution, result retrieval, count
+parsing, and timing propagation are working. It is not a fidelity benchmark.
+
+Typical use:
+
+```bash
+./qfw_iqm_submit_smoke.sh --shots 100 --json
+./qfw_iqm_submit_smoke.sh --shots 100 --flip --json
+```
+
+### `scripts/iqm_timing_overhead.py`
+
+`iqm_timing_overhead.py` measures job-submission and execution timing using
+Qiskit-authored measurement circuits. It runs two experiment families. The
+shot sweep submits single circuits at different shot counts, while the batch
+sweep submits multiple circuits in one backend call to expose batching behavior.
+The script can repeat each case with `--repetitions` and can vary circuit width
+with `--widths`.
+
+For each record, the script writes the generated QASM artifact, the raw result
+payload, and per-record timing metrics. It also writes
+`timing_records.jsonl` and a `timing_summary.json` file with basic linear fits
+for shot scaling and batch scaling where enough successful points exist. Use
+`--dry-run` to verify the planned record set and output layout without
+submitting jobs.
+
+Typical use:
+
+```bash
+./qfw_iqm_timing_overhead.sh \
+    --shots-sweep 1,10,100 \
+    --batch-sweep 1,2 \
+    --repetitions 3 \
+    --json
+```
+
+### `scripts/iqm_submit_smoke_qasm.py`
+
+`iqm_submit_smoke_qasm.py` is a lower-level version of the smoke test that
+constructs OpenQASM directly instead of authoring the circuit with Qiskit. It
+submits a one-qubit measurement circuit through the selected backend using the
+backend `sync_run` path. It supports `--flip`, `--shots`, `--qubit`,
+`--calibration-set-id`, `--timeout`, and `--use-timeslot`.
+
+This script is kept as an explicit OpenQASM example and as a debugging path for
+the native request format. New characterization tests should usually prefer
+`iqm_submit_smoke.py` so that circuit construction goes through Qiskit.
+
+Typical use:
+
+```bash
+python3 scripts/iqm_submit_smoke_qasm.py --backend direct --shots 100 --json
+```
+
+### `scripts/iqm_timing_overhead_qasm.py`
+
+`iqm_timing_overhead_qasm.py` is the direct-OpenQASM counterpart to
+`iqm_timing_overhead.py`. It builds measurement circuits as QASM strings,
+submits them through `sync_run` or `sync_run_many`, and records the same style
+of per-job timing output and summary fits. It supports the same timing sweep
+controls as the Qiskit timing script, plus `--qubit` for one-qubit mapped runs.
+
+This script is useful when the native OpenQASM request path itself needs to be
+debugged or compared against the Qiskit-authored workflow. For general timing
+campaigns, use `iqm_timing_overhead.py`.
+
+Typical use:
+
+```bash
+python3 scripts/iqm_timing_overhead_qasm.py \
+    --backend direct \
+    --shots-sweep 1,10,100 \
+    --batch-sweep 1,2 \
+    --json
+```
+
+## Helper Modules
+
+The `scripts/qfw_iqm_util/` package contains shared implementation code used
+by the workflow scripts. These files are not meant to be run directly.
+
+| Module | Role |
+| --- | --- |
+| `backend.py` | Parses the common `--backend` option and selects QFw or direct IQM execution. |
+| `backend_direct.py` | Implements direct `iqm-client` access, metadata queries, direct circuit submission, timing extraction, and coupling graph construction. |
+| `backend_qfw.py` | Adapts the workflows to the QFw IQM service and QFw Qiskit backend. |
+| `output.py` | Creates the `data/raw/<date>/<script>/<run>/` directory layout and writes JSON artifacts. |
+| `qfw.py` | Reserves the IQM QPM service and exits the QFw application cleanly. |
+| `qiskit_exec.py` | Contains shared Qiskit execution helpers, QASM artifact writing, count extraction, and timing summary propagation. |
+| `timing.py` | Converts IQM job timeline events into duration fields used by smoke and timing reports. |
+
 ## QFw Execution Model
 
 The shell wrappers assume QFw is responsible for startup, service placement,
