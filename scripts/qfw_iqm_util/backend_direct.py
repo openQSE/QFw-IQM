@@ -509,6 +509,10 @@ class DirectIQMBackend:
 			"static_architecture": static,
 			"active_qubits": get_dynamic_qubits(dynamic),
 			"calibration_set_id": dynamic.get("calibration_set_id"),
+			"_raw_iqm": {
+				"static_architecture": static,
+				"dynamic_architecture": dynamic,
+			},
 		}
 
 	def get_dynamic_backend_info(self, calibration_set_id=None):
@@ -518,6 +522,9 @@ class DirectIQMBackend:
 			"backend": "iqm-direct",
 			"metadata_supported": True,
 			"dynamic_architecture": dynamic,
+			"_raw_iqm": {
+				"dynamic_architecture": dynamic,
+			},
 		}
 
 	def get_calibration_snapshot(self, calibration_set_id=None):
@@ -559,6 +566,12 @@ class DirectIQMBackend:
 			"errors": errors,
 			"qubits": dynamic.get("qubits"),
 			"couplers": dynamic.get("couplers"),
+			"_raw_iqm": {
+				"dynamic_architecture": dynamic,
+				"calibration_set": calibration["data"],
+				"quality_metric_set": quality["data"],
+				"errors": errors,
+			},
 		}
 
 	def get_coupling_graph(self, calibration_set_id=None):
@@ -569,6 +582,10 @@ class DirectIQMBackend:
 			"backend": "iqm-direct",
 			"metadata_supported": True,
 			"calibration_set_id": dynamic.get("calibration_set_id"),
+			"_raw_iqm": {
+				"static_architecture": static,
+				"dynamic_architecture": dynamic,
+			},
 			**build_coupling_graph(static, dynamic),
 		}
 
@@ -611,6 +628,8 @@ class DirectIQMBackend:
 			iqm_circuits,
 			calibration_set_id=calibration_set_id,
 			shots=shots)
+		run_request_data = to_jsonable(run_request)
+		circuit_data = to_jsonable(iqm_circuits)
 
 		submit_started = time.monotonic()
 		job = submit_run_request(self.client(), run_request, use_timeslot)
@@ -678,6 +697,12 @@ class DirectIQMBackend:
 					"metadata": record,
 				},
 			},
+			"_raw_iqm": {
+				"circuits": circuit_data,
+				"run_request": run_request_data,
+				"job": job_data,
+				"measurement_counts": counts_data,
+			},
 			"rc": 0,
 		}
 
@@ -722,7 +747,7 @@ class DirectIQMBackend:
 			use_timeslot=use_timeslot)
 		result = job.result(timeout=timeout or self._job_timeout)
 		iqm_job = optional_attr_data(job, "_job")
-		return build_qiskit_run_record(
+		record = build_qiskit_run_record(
 			self.name,
 			circuit_list,
 			shots,
@@ -737,6 +762,12 @@ class DirectIQMBackend:
 				},
 			},
 		)
+		record["_raw_iqm"] = {
+			"qiskit_result": (
+				record.get("result", {}).get("qiskit", {}).get("result")),
+			"iqm_job": iqm_job,
+		}
+		return record
 
 	def finish(self, rc: int = 0) -> int:
 		return rc

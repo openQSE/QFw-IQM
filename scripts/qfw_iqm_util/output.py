@@ -9,6 +9,8 @@ from typing import Any
 from uuid import UUID
 import json
 
+RAW_IQM_KEY = "_raw_iqm"
+
 
 @dataclass(frozen=True)
 class RunPaths:
@@ -40,7 +42,13 @@ def to_jsonable(value: Any) -> Any:
 
 def write_json(path: Path, data: Any) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
-	path.write_text(json.dumps(to_jsonable(data), indent=2, sort_keys=True))
+	payload = to_jsonable(data)
+	if isinstance(payload, dict) and RAW_IQM_KEY in payload:
+		raw_payload = payload.pop(RAW_IQM_KEY)
+		raw_path = path.with_suffix(".raw.json")
+		raw_path.write_text(json.dumps(
+			raw_payload, indent=2, sort_keys=True))
+	path.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def script_output_path(paths: RunPaths, json_mode: bool) -> Path:
