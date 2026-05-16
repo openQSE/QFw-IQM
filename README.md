@@ -34,7 +34,14 @@ export QFW_IQM_JOB_TIMEOUT=300
 For direct execution without QFw:
 
 - The `iqm-client` Python package and its IQM dependencies.
+- The local `qhw-iqm` and `qhw-data` packages for normalized artifacts.
 - `QFW_QC_URL` and `QFW_API_KEY` exported in the shell.
+
+Install the local Python requirements from this repository root:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
 
 ## Workflows
 
@@ -279,6 +286,8 @@ not be copied as the default pattern for new tests.
 `scripts/qfw_iqm_util/timing.py` converts IQM timeline events into duration
 fields. `scripts/qfw_iqm_util/qiskit_exec.py` normalizes Qiskit results,
 counts, job IDs, and backend timing metadata into a common result payload.
+Direct IQM mode also writes provider-neutral `*.qhw.json` artifacts through
+`qhw-iqm` whenever a raw IQM payload is written as `*.raw.json`.
 
 This keeps each workflow focused on the experiment design:
 
@@ -487,6 +496,7 @@ by the workflow scripts. These files are not meant to be run directly.
 | `backend_direct.py` | Implements direct `iqm-client` access, metadata queries, direct circuit submission, timing extraction, and coupling graph construction. |
 | `backend_qfw.py` | Adapts the workflows to the QFw IQM service and QFw Qiskit backend. |
 | `output.py` | Creates the `data/raw/<date>/<script>/<run>/` directory layout and writes JSON artifacts. |
+| `qhw.py` | Calls `qhw-iqm` to convert direct IQM raw payloads into provider-neutral `qhw-data` records. |
 | `qfw.py` | Reserves the IQM QPM service and exits the QFw application cleanly. |
 | `qiskit_exec.py` | Contains shared Qiskit execution helpers, QASM artifact writing, count extraction, and timing summary propagation. |
 | `timing.py` | Converts IQM job timeline events into duration fields used by smoke and timing reports. |

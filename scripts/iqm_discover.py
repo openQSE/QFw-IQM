@@ -54,6 +54,11 @@ def main() -> int:
 		"coupling_graph": paths.root / "coupling_graph.json",
 	}
 	write_json(files["device_snapshot"], device_snapshot)
+	qhw_device = device_snapshot.get("backend_info", {}).get("qhw_device")
+	if qhw_device:
+		files["device_snapshot_qhw"] = (
+			paths.root / "device_snapshot.qhw.json")
+		write_json(files["device_snapshot_qhw"], qhw_device)
 	write_json(files["calibration_snapshot"], calibration_snapshot)
 	write_json(files["coupling_graph"], coupling_graph)
 

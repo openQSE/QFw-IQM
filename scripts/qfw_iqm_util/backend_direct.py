@@ -14,6 +14,8 @@ import re
 import time
 
 from qfw_iqm_util.output import to_jsonable
+from qfw_iqm_util.qhw import QHW_IQM_DEVICE_ID_KEY, QHW_IQM_KIND_KEY
+from qfw_iqm_util.qhw import normalize_iqm_payload, qhw_device_id
 from qfw_iqm_util.qiskit_exec import build_qiskit_run_record
 from qfw_iqm_util.qiskit_exec import ensure_circuit_list
 from qfw_iqm_util.qiskit_exec import optional_attr_data
@@ -473,10 +475,22 @@ class DirectIQMBackend:
 		self._qiskit_provider = None
 		self._qiskit_backends = {}
 		self._config = load_env()
+		self._qhw_device_id = qhw_device_id()
 		self._request_timeout = get_env_float(
 			"QFW_IQM_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
 		self._job_timeout = get_env_float(
 			"QFW_IQM_JOB_TIMEOUT", DEFAULT_JOB_TIMEOUT)
+
+	def _qhw_tags(self, kind: str) -> dict[str, str | None]:
+		return {
+			QHW_IQM_KIND_KEY: kind,
+			QHW_IQM_DEVICE_ID_KEY: self._qhw_device_id,
+		}
+
+	def _normalize_qhw(self, kind: str,
+			   raw_payload: dict[str, Any]) -> dict[str, Any]:
+		return normalize_iqm_payload(
+			kind, raw_payload, device_id=self._qhw_device_id)
 
 	def client(self):
 		if self._client is None:
@@ -499,6 +513,10 @@ class DirectIQMBackend:
 	def get_backend_info(self):
 		static = to_jsonable(self.get_static_architecture())
 		dynamic = to_jsonable(self.get_dynamic_architecture())
+		raw_payload = {
+			"static_architecture": static,
+			"dynamic_architecture": dynamic,
+		}
 		return {
 			"backend": "iqm-direct",
 			"metadata_supported": True,
@@ -509,10 +527,9 @@ class DirectIQMBackend:
 			"static_architecture": static,
 			"active_qubits": get_dynamic_qubits(dynamic),
 			"calibration_set_id": dynamic.get("calibration_set_id"),
-			"_raw_iqm": {
-				"static_architecture": static,
-				"dynamic_architecture": dynamic,
-			},
+			"qhw_device": self._normalize_qhw("device", raw_payload),
+			**self._qhw_tags("device"),
+			"_raw_iqm": raw_payload,
 		}
 
 	def get_dynamic_backend_info(self, calibration_set_id=None):
@@ -549,6 +566,12 @@ class DirectIQMBackend:
 			for result in (calibration, quality)
 			if not result["ok"]
 		}
+		raw_payload = {
+			"dynamic_architecture": dynamic,
+			"calibration_set": calibration["data"],
+			"quality_metric_set": quality["data"],
+			"errors": errors,
+		}
 		return {
 			"backend": "iqm-direct",
 			"metadata_supported": True,
@@ -566,26 +589,27 @@ class DirectIQMBackend:
 			"errors": errors,
 			"qubits": dynamic.get("qubits"),
 			"couplers": dynamic.get("couplers"),
-			"_raw_iqm": {
-				"dynamic_architecture": dynamic,
-				"calibration_set": calibration["data"],
-				"quality_metric_set": quality["data"],
-				"errors": errors,
-			},
+			"qhw_calibration": self._normalize_qhw(
+				"calibration", raw_payload),
+			**self._qhw_tags("calibration"),
+			"_raw_iqm": raw_payload,
 		}
 
 	def get_coupling_graph(self, calibration_set_id=None):
 		static = to_jsonable(self.get_static_architecture())
 		dynamic = to_jsonable(
 			self.get_dynamic_architecture(calibration_set_id))
+		raw_payload = {
+			"static_architecture": static,
+			"dynamic_architecture": dynamic,
+		}
 		return {
 			"backend": "iqm-direct",
 			"metadata_supported": True,
 			"calibration_set_id": dynamic.get("calibration_set_id"),
-			"_raw_iqm": {
-				"static_architecture": static,
-				"dynamic_architecture": dynamic,
-			},
+			"qhw_coupling": self._normalize_qhw("coupling", raw_payload),
+			**self._qhw_tags("coupling"),
+			"_raw_iqm": raw_payload,
 			**build_coupling_graph(static, dynamic),
 		}
 
@@ -682,10 +706,18 @@ class DirectIQMBackend:
 			},
 		}
 		timing_summary = build_timing_summary(record)
+		raw_payload = {
+			"circuits": circuit_data,
+			"run_request": run_request_data,
+			"job": job_data,
+			"measurement_counts": counts_data,
+		}
+		qhw_result = self._normalize_qhw("result", raw_payload)
 		return {
 			"cid": cid,
 			"result": {
 				"counts": counts if len(infos) == 1 else counts_by_circuit,
+				"qhw_result": qhw_result,
 				"iqm": {
 					"job_id": str(job.job_id),
 					"status": status,
@@ -697,12 +729,8 @@ class DirectIQMBackend:
 					"metadata": record,
 				},
 			},
-			"_raw_iqm": {
-				"circuits": circuit_data,
-				"run_request": run_request_data,
-				"job": job_data,
-				"measurement_counts": counts_data,
-			},
+			**self._qhw_tags("result"),
+			"_raw_iqm": raw_payload,
 			"rc": 0,
 		}
 
@@ -762,11 +790,15 @@ class DirectIQMBackend:
 				},
 			},
 		)
-		record["_raw_iqm"] = {
+		raw_payload = {
 			"qiskit_result": (
 				record.get("result", {}).get("qiskit", {}).get("result")),
 			"iqm_job": iqm_job,
 		}
+		record.setdefault("result", {})["qhw_result"] = self._normalize_qhw(
+			"result", raw_payload)
+		record.update(self._qhw_tags("result"))
+		record["_raw_iqm"] = raw_payload
 		return record
 
 	def finish(self, rc: int = 0) -> int:
