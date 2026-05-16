@@ -98,6 +98,201 @@ prints the path to that saved output file.
 
 The `data/` directory is intentionally ignored by git.
 
+## Test Suite Design
+
+The suite is split into three layers:
+
+- Shell wrappers: `qfw_iqm_*.sh` files provide the user-facing commands.
+- Python workflows: `scripts/iqm_*.py` files define each characterization test.
+- Backend adapters: `scripts/qfw_iqm_util/backend_*.py` files hide whether the
+  workflow talks to IQM through QFw or directly through `iqm-client`.
+
+The goal is for each Python workflow to describe the test intent without
+duplicating QFw startup code, IQM client setup, result-directory handling, or
+timing parsing. New tests should normally add one shell wrapper and one Python
+workflow, then use the shared helpers under `scripts/qfw_iqm_util/`.
+
+The high-level flow is:
+
+```mermaid
+flowchart TD
+    user["User command<br/>qfw_iqm_*.sh"] --> common["qfw_iqm_common.sh<br/>parse backend and lock run id"]
+    common --> mode{"Backend mode"}
+    mode -->|"direct"| direct_python["Python workflow<br/>scripts/iqm_*.py"]
+    mode -->|"qfw or auto with QFw"| setup["qfw_setup.sh<br/>config/qfw_iqm_services.yaml"]
+    setup --> srun["qfw_srun.sh<br/>launch workflow as QFw app"]
+    srun --> qfw_python["Python workflow<br/>scripts/iqm_*.py"]
+    direct_python --> selector["get_backend"]
+    qfw_python --> selector
+    selector --> direct_backend["DirectIQMBackend"]
+    selector --> qfw_backend["QFwIQMBackend"]
+    direct_backend --> iqm_client["iqm-client<br/>IQM Qiskit provider"]
+    qfw_backend --> qpm["api_qpm<br/>IQM QPM service"]
+    iqm_client --> machine["IQM machine"]
+    qpm --> machine
+    direct_python --> output["data/raw/date/script/run-id"]
+    qfw_python --> output
+```
+
+### Shell Wrapper Flow
+
+Every top-level wrapper sources `qfw_iqm_common.sh` and calls `qfw_iqm_init`.
+That common setup performs the suite-level decisions:
+
+- It resolves the repository path and the QFw service config path.
+- It parses `--backend auto|qfw|direct`.
+- It parses `--run-id` if one was provided.
+- It generates one UTC `HHMMSS` run id when the user did not provide one.
+- It forwards the same run id to every Python workflow invocation.
+
+The locked run id is important for long tests and suite runs. The output layout
+uses `data/raw/<date>/<script>/<run-id>/`; without a locked run id, a workflow
+that starts more than one Python process could create multiple sibling
+timestamp directories.
+
+For single-workflow commands, wrappers call:
+
+```bash
+qfw_iqm_run_single "scripts/<workflow>.py" "$@"
+```
+
+For suite-style commands, `qfw_iqm_run_all.sh` starts QFw once when needed and
+then calls the Python workflows through `qfw_iqm_run_python_json` or
+`qfw_iqm_run_qfw_json`.
+
+### Backend Selection
+
+All normal workflows support:
+
+```text
+--backend auto|qfw|direct
+```
+
+The default is `auto`. Backend selection is implemented in
+`scripts/qfw_iqm_util/backend.py`:
+
+- `auto` uses QFw when an activated QFw environment is visible and the DEFw/QPM
+  Python modules can be imported.
+- `auto` falls back to direct `iqm-client` access when QFw is not available.
+- `qfw` requires QFw. If QFw is not activated, the workflow fails early.
+- `direct` always uses direct `iqm-client` access and never starts QFw.
+
+This means the same Python workflow can be used in three situations:
+
+- QFw production path: QFw is activated and the IQM QPM service owns access to
+  the device.
+- Standalone characterization path: QFw is absent and the script talks directly
+  to IQM.
+- Debug path: the user forces either backend to compare QFw behavior against
+  direct IQM behavior.
+
+### Backend Interface
+
+Both backend adapters expose the same workflow-facing operations:
+
+- `get_backend_info()`
+- `get_dynamic_backend_info(calibration_set_id=None)`
+- `get_calibration_snapshot(calibration_set_id=None)`
+- `get_coupling_graph(calibration_set_id=None)`
+- `sync_run(info)`
+- `sync_run_many(infos)`
+- `run_circuits(circuits, shots=..., calibration_set_id=..., ...)`
+- `finish(rc=0)`
+
+Workflows should use these methods rather than importing QFw, DEFw, or
+`iqm-client` directly. Metadata-only workflows use the metadata methods.
+OpenQASM debugging workflows use `sync_run` or `sync_run_many`. Qiskit-authored
+workflows use `run_circuits`.
+
+### Direct Backend Structure
+
+`DirectIQMBackend` lives in `scripts/qfw_iqm_util/backend_direct.py`. It is the
+standalone implementation used when QFw is not involved.
+
+It reads:
+
+- `QFW_QC_URL`
+- `QFW_API_KEY`
+- optional `QFW_IQM_QUANTUM_COMPUTER`
+- optional `QFW_IQM_REQUEST_TIMEOUT`
+- optional `QFW_IQM_JOB_TIMEOUT`
+
+For metadata operations, it calls the IQM client APIs directly and writes the
+raw data into JSON-friendly structures. For Qiskit-authored circuits, it uses
+IQM's Qiskit provider path. For lower-level `_qasm.py` workflows, it can build
+native IQM circuit objects from the OpenQASM input and submit them through the
+IQM client.
+
+The direct backend is useful for early machine acceptance, service isolation,
+and debugging. It should remain thin enough that it does not become a second
+QFw implementation.
+
+### QFw Backend Structure
+
+`QFwIQMBackend` lives in `scripts/qfw_iqm_util/backend_qfw.py`. It adapts the
+same workflow API to QFw.
+
+When a workflow first needs the backend, it reserves an IQM QPM service through
+`api_qpm` and DEFw:
+
+```text
+application -> api_qpm -> resource manager -> IQM QPM service
+```
+
+Metadata calls and `sync_run` calls are forwarded to that service. Qiskit
+workflows create a QFw Qiskit backend with IQM backend type and
+superconducting capability, then call `backend.run(...).result()`. The QFw
+backend is responsible for routing the circuit request to the selected IQM QPM
+service.
+
+The QFw backend is the path that exercises the production integration:
+
+```text
+shell wrapper
+  -> qfw_setup.sh with config/qfw_iqm_services.yaml
+  -> qfw_srun.sh <Python workflow>
+  -> QFwIQMBackend
+  -> IQM QPM service
+  -> IQM machine
+```
+
+### Workflow Categories
+
+The suite intentionally contains more than one workflow style:
+
+- Metadata workflows: `iqm_env_check.py` and `iqm_discover.py` query the
+  backend and do not submit quantum jobs.
+- Operational smoke workflows: `iqm_submit_smoke.py` submits a small
+  Qiskit-authored circuit to confirm that execution and result retrieval work.
+- Timing workflows: `iqm_timing_overhead.py` and `iqm_timing_1q.py` submit
+  Qiskit-authored circuits and post-process timing telemetry.
+- OpenQASM examples: `*_qasm.py` scripts are retained as lower-level debugging
+  examples and are not the preferred path for new characterization tests.
+
+The preferred direction is Qiskit-authored characterization workflows. The
+QASM scripts are useful when testing native request handling, but they should
+not be copied as the default pattern for new tests.
+
+### Shared Output And Timing
+
+`scripts/qfw_iqm_util/output.py` owns the output tree and JSON serialization.
+`scripts/qfw_iqm_util/timing.py` converts IQM timeline events into duration
+fields. `scripts/qfw_iqm_util/qiskit_exec.py` normalizes Qiskit results,
+counts, job IDs, and backend timing metadata into a common result payload.
+
+This keeps each workflow focused on the experiment design:
+
+```text
+parse arguments
+create run paths
+select backend
+build circuits or query metadata
+submit through the backend interface
+write raw outputs
+write summary and analysis files
+finish backend cleanly
+```
+
 ## Script Reference
 
 The top-level Python files under `scripts/` are the workflow entry points.
