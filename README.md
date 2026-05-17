@@ -155,7 +155,7 @@ there instead of adding test-specific logic to `qfw_iqm_run_all.sh`.
 Output is written under:
 
 ```text
-data/raw/<YYYYMMDD>/<script-name>/<HHMMSS>/
+data/<YYYYMMDD>/<script-name>/<HHMMSS>/
 ```
 
 Each workflow writes its terminal summary to the run's `results/` directory.
@@ -197,7 +197,7 @@ flowchart TD
     qfw_backend --> qpm["api_qpm<br/>IQM QPM service"]
     iqm_client --> machine["IQM machine"]
     qpm --> machine
-    direct_python --> output["data/raw/date/script/run-id"]
+    direct_python --> output["data/date/script/run-id"]
     qfw_python --> output
 ```
 
@@ -213,7 +213,7 @@ That common setup performs the suite-level decisions:
 - It forwards the same run id to every Python workflow invocation.
 
 The locked run id is important for long tests and suite runs. The output layout
-uses `data/raw/<date>/<script>/<run-id>/`; without a locked run id, a workflow
+uses `data/<date>/<script>/<run-id>/`; without a locked run id, a workflow
 that starts more than one Python process could create multiple sibling
 timestamp directories.
 
@@ -557,7 +557,7 @@ by the workflow scripts. These files are not meant to be run directly.
 | `backend.py` | Parses the common `--backend` option and selects QFw or direct IQM execution. |
 | `backend_direct.py` | Implements direct `iqm-client` access, metadata queries, direct circuit submission, timing extraction, and coupling graph construction. |
 | `backend_qfw.py` | Adapts the workflows to the QFw IQM service and QFw Qiskit backend. |
-| `output.py` | Creates the `data/raw/<date>/<script>/<run>/` directory layout and writes JSON artifacts. |
+| `output.py` | Creates the `data/<date>/<script>/<run>/` directory layout and writes JSON artifacts. |
 | `qhw.py` | Calls `qhw-iqm` to convert direct IQM raw payloads into provider-neutral `qhw-data` records. |
 | `qfw.py` | Reserves the IQM QPM service and exits the QFw application cleanly. |
 | `qiskit_exec.py` | Contains shared Qiskit execution helpers, QASM artifact writing, count extraction, and timing summary propagation. |

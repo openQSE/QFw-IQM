@@ -156,7 +156,7 @@ def create_run_paths(script_file: str,
 
 	if output_dir is None:
 		repo_dir = Path(script_file).resolve().parents[1]
-		root = repo_dir / "data" / "raw" / date_id / script_name / run_id
+		root = repo_dir / "data" / date_id / script_name / run_id
 	else:
 		root = output_dir
 
