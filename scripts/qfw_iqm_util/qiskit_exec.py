@@ -120,6 +120,11 @@ def _qfw_backend_metadata(result_dict: dict[str, Any]) -> list[dict[str, Any]]:
 	return metadata
 
 
+def qiskit_result_metadata(result_dict: dict[str, Any]) -> list[dict[str, Any]]:
+	"""Return per-experiment metadata entries from a Qiskit result dict."""
+	return _qfw_backend_metadata(result_dict)
+
+
 def _metadata_timing_summaries(
 		metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
 	summaries = []

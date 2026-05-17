@@ -16,8 +16,6 @@ import time
 from qfw_iqm_util.output import to_jsonable
 from qfw_iqm_util.qhw import QHW_IQM_DEVICE_ID_KEY, QHW_IQM_KIND_KEY
 from qfw_iqm_util.qhw import normalize_iqm_payload, qhw_device_id
-from qfw_iqm_util.qiskit_exec import build_qiskit_run_record
-from qfw_iqm_util.qiskit_exec import ensure_circuit_list
 from qfw_iqm_util.qiskit_exec import optional_attr_data
 from qfw_iqm_util.timing import build_timing_summary
 
@@ -763,33 +761,31 @@ class DirectIQMBackend:
 					calibration_set_id=calibration_set_id))
 		return self._qiskit_backends[cache_key]
 
-	def run_circuits(self, circuits, shots: int = 100,
-		     calibration_set_id=None, timeout=None, use_timeslot=False):
-		circuit_list = ensure_circuit_list(circuits)
-		run_input = circuit_list[0] if len(circuit_list) == 1 else circuit_list
-		backend = self.qiskit_backend(calibration_set_id)
-		run_start = time.monotonic()
-		job = backend.run(
-			run_input,
-			shots=shots,
-			use_timeslot=use_timeslot)
-		result = job.result(timeout=timeout or self._job_timeout)
-		iqm_job = optional_attr_data(job, "_job")
-		record = build_qiskit_run_record(
-			self.name,
-			circuit_list,
-			shots,
-			run_start,
-			job,
-			result,
-			extra={
-				"iqm": {
-					"calibration_set_id": calibration_set_id,
-					"use_timeslot": use_timeslot,
-					"job": iqm_job,
-				},
+	def qiskit_run_options(self, shots: int, calibration_set_id=None,
+	    timeout=None, use_timeslot=False, extra_run_options=None):
+		del calibration_set_id, timeout
+		options = {
+			"shots": shots,
+			"use_timeslot": use_timeslot,
+		}
+		options.update(extra_run_options or {})
+		return options
+
+	def qiskit_job_result(self, job, timeout=None):
+		return job.result(timeout=timeout or self._job_timeout)
+
+	def qiskit_record_extra(self, context):
+		return {
+			"iqm": {
+				"calibration_set_id": context.get("calibration_set_id"),
+				"use_timeslot": context.get("use_timeslot"),
 			},
-		)
+		}
+
+	def extract_result_and_normalize(self, job, result, record, context):
+		del result, context
+		iqm_job = optional_attr_data(job, "_job")
+		record.setdefault("result", {}).setdefault("iqm", {})["job"] = iqm_job
 		raw_payload = {
 			"qiskit_result": (
 				record.get("result", {}).get("qiskit", {}).get("result")),
@@ -800,6 +796,17 @@ class DirectIQMBackend:
 		record.update(self._qhw_tags("result"))
 		record["_raw_iqm"] = raw_payload
 		return record
+
+	def run_circuits(self, circuits, shots: int = 100,
+		     calibration_set_id=None, timeout=None, use_timeslot=False):
+		from qfw_iqm_util.backend import BackendWrapper
+		return BackendWrapper(self).run_circuits(
+			circuits,
+			shots=shots,
+			calibration_set_id=calibration_set_id,
+			timeout=timeout,
+			use_timeslot=use_timeslot,
+		)
 
 	def finish(self, rc: int = 0) -> int:
 		return rc

@@ -73,12 +73,13 @@ def main() -> int:
 		"qasm_artifact": str(qasm_file),
 	})
 
-	result = to_jsonable(backend.run_circuits(
+	job = backend.run(
 		[circuit],
 		shots=args.shots,
 		calibration_set_id=args.calibration_set_id,
 		timeout=args.timeout,
-		use_timeslot=args.use_timeslot))
+		use_timeslot=args.use_timeslot)
+	result = to_jsonable(job.result(timeout=args.timeout))
 	result_files = write_backend_result_artifacts(result_file, result)
 
 	qhw_result = backend_result_qhw(result)

@@ -197,12 +197,13 @@ def run_case(backend, circuits, args: argparse.Namespace,
 	if dry_run:
 		name = getattr(circuits[0], "name", "dry-run") if circuits else "dry-run"
 		return dry_run_result(name, shots, len(circuits))
-	return to_jsonable(backend.run_circuits(
+	job = backend.run(
 		circuits,
 		shots=shots,
 		calibration_set_id=args.calibration_set_id,
 		timeout=args.timeout,
-		use_timeslot=args.use_timeslot))
+		use_timeslot=args.use_timeslot)
+	return to_jsonable(job.result(timeout=args.timeout))
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
