@@ -1,2 +1,3 @@
+PyYAML>=6.0
 qhw-data>=0.1.0
 qhw-iqm>=0.1.0

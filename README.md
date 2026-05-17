@@ -76,9 +76,46 @@ To run the current suite in one QFw session:
 ./qfw_iqm_run_all.sh
 ```
 
-`qfw_iqm_run_all.sh` includes the environment check, discovery capture, smoke
-submission, and a short single-qubit timing sanity sweep. The timing sweep is
-kept intentionally small so that `run_all` remains safe for routine validation.
+`qfw_iqm_run_all.sh` accepts a test level:
+
+```bash
+./qfw_iqm_run_all.sh --level smoke
+./qfw_iqm_run_all.sh --level l1
+./qfw_iqm_run_all.sh --level l2
+```
+
+The positional form is also accepted:
+
+```bash
+./qfw_iqm_run_all.sh smoke
+```
+
+The default level is defined in `config/qfw_iqm_tests.yaml`. Set
+`QFW_IQM_RUN_ALL_LEVEL` to override that default.
+
+The levels are:
+
+- `smoke`: environment check, discovery capture, and one smoke submission.
+- `l1`: `smoke` plus short timing-overhead and 1Q timing sanity sweeps.
+- `l2`: `smoke` plus broader timing-overhead and 1Q timing sweeps.
+
+Levels are ordered by the manifest. A requested level includes every test from
+that level and all lower levels. Additional levels can be added by extending
+the manifest; `qfw_iqm_run_all.sh` does not hardcode the level names.
+
+The `l1` timing sweeps are kept intentionally small so that `run_all` remains
+safe for routine validation. The `l2` defaults are broader, but still tunable
+through the same environment variables. The timing-overhead settings can be
+changed with:
+
+```bash
+export QFW_IQM_RUN_ALL_OVERHEAD_SHOTS_SWEEP=1,10,100
+export QFW_IQM_RUN_ALL_OVERHEAD_BATCH_SWEEP=1,2
+export QFW_IQM_RUN_ALL_OVERHEAD_BATCH_SHOTS=100
+export QFW_IQM_RUN_ALL_OVERHEAD_WIDTHS=1
+export QFW_IQM_RUN_ALL_OVERHEAD_REPETITIONS=1
+```
+
 The default 1Q timing settings can be changed with:
 
 ```bash
@@ -89,8 +126,31 @@ export QFW_IQM_RUN_ALL_1Q_SHOTS=100
 export QFW_IQM_RUN_ALL_1Q_REPETITIONS=1
 ```
 
+The `l2` built-in defaults are:
+
+```bash
+QFW_IQM_RUN_ALL_OVERHEAD_SHOTS_SWEEP=1,10,100,1000
+QFW_IQM_RUN_ALL_OVERHEAD_BATCH_SWEEP=1,2,4
+QFW_IQM_RUN_ALL_OVERHEAD_WIDTHS=1,2,4
+QFW_IQM_RUN_ALL_1Q_QUBITS=all
+QFW_IQM_RUN_ALL_1Q_GATES=x,rx,ry
+QFW_IQM_RUN_ALL_1Q_DEPTHS=1,2,4,8,16,32,64,128
+```
+
 Larger timing campaigns should still be run explicitly with the desired shot
 sweep, batch sweep, depth sweep, qubit list, and repetition count.
+
+The suite membership and default per-level arguments live in:
+
+```text
+config/qfw_iqm_tests.yaml
+```
+
+Each test entry declares a test name, the minimum level that includes it, the
+Python workflow path, and optional per-level arguments. Argument entries can
+reference environment-variable overrides, which lets the manifest provide
+safe defaults without removing user control. New workflows should be added
+there instead of adding test-specific logic to `qfw_iqm_run_all.sh`.
 
 Output is written under:
 
@@ -165,7 +225,8 @@ qfw_iqm_run_single "scripts/<workflow>.py" "$@"
 
 For suite-style commands, `qfw_iqm_run_all.sh` starts QFw once when needed and
 then calls the Python workflows through `qfw_iqm_run_python_json` or
-`qfw_iqm_run_qfw_json`.
+`qfw_iqm_run_qfw_json`. The suite runner reads `config/qfw_iqm_tests.yaml` to
+decide which workflows are included by the requested level.
 
 ### Backend Selection
 
