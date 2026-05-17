@@ -78,6 +78,53 @@ def write_json(path: Path, data: Any) -> None:
 	path.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def backend_result_qhw(data: Any) -> dict[str, Any]:
+	payload = to_jsonable(data)
+	if not isinstance(payload, dict):
+		return {}
+	result = payload.get("result", {})
+	if isinstance(result, dict):
+		qhw_result = result.get("qhw_result")
+		if isinstance(qhw_result, dict):
+			return qhw_result
+	qhw_result = payload.get("qhw_result")
+	return qhw_result if isinstance(qhw_result, dict) else {}
+
+
+def backend_result_raw(data: Any) -> dict[str, Any]:
+	payload = to_jsonable(data)
+	if not isinstance(payload, dict):
+		return {}
+	raw_payload = payload.get(RAW_IQM_KEY)
+	return raw_payload if isinstance(raw_payload, dict) else {}
+
+
+def write_backend_result_artifacts(path: Path, data: Any) -> dict[str, str]:
+	path.parent.mkdir(parents=True, exist_ok=True)
+	payload = to_jsonable(data)
+	raw_payload = backend_result_raw(payload)
+	qhw_payload = backend_result_qhw(payload)
+	files = {}
+
+	if raw_payload:
+		raw_path = path.with_suffix(".raw.json")
+		raw_path.write_text(json.dumps(raw_payload, indent=2, sort_keys=True))
+		files["raw"] = str(raw_path)
+
+	if qhw_payload:
+		qhw_path = path.with_suffix(".qhw.json")
+		qhw_path.write_text(json.dumps(
+			strip_internal_keys(qhw_payload), indent=2, sort_keys=True))
+		files["qhw"] = str(qhw_path)
+
+	if files:
+		return files
+
+	raise ValueError(
+		"backend circuit results must include raw provider data and a "
+		"normalized qhw_result")
+
+
 def script_output_path(paths: RunPaths, json_mode: bool) -> Path:
 	name = "stdout.json" if json_mode else "stdout.txt"
 	return paths.results / name

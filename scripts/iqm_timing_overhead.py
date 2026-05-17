@@ -14,14 +14,43 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qfw_iqm_util.backend import add_backend_argument, get_backend
+from qfw_iqm_util.output import backend_result_qhw
 from qfw_iqm_util.output import create_run_paths
 from qfw_iqm_util.output import render_json_output
 from qfw_iqm_util.output import render_text_output
 from qfw_iqm_util.output import script_output_path
 from qfw_iqm_util.output import to_jsonable
+from qfw_iqm_util.output import write_backend_result_artifacts
 from qfw_iqm_util.output import write_json
 from qfw_iqm_util.output import write_script_output
 from qfw_iqm_util.qiskit_exec import write_qasm2_artifact
+
+
+def dry_run_result(cid: str, shots: int, num_circuits: int) -> dict[str, Any]:
+	return {
+		"cid": cid,
+		"result": {
+			"qhw_result": {
+				"schema": "qhw-result-v1",
+				"provider": "dry-run",
+				"device": {"id": "dry-run", "provider": "dry-run"},
+				"job": {"id": cid, "status": "completed"},
+				"result": {
+					"shots": shots,
+					"num_circuits": num_circuits,
+					"counts": {},
+					"success": True,
+				},
+				"timing": {"timestamps": {}, "timeline": [],
+					   "durations_seconds": {}},
+				"errors": [],
+				"extensions": {},
+				"raw": {"included": False, "format": None, "artifacts": []},
+			},
+		},
+		"_raw_iqm": {"dry_run": True, "cid": cid},
+		"rc": 0,
+	}
 
 
 def parse_int_list(value: str) -> list[int]:
@@ -76,23 +105,18 @@ def resolve_widths(widths: str, active_qubits: list[Any],
 	return resolved
 
 
-def extract_payload(result: dict[str, Any]) -> dict[str, Any]:
-	payload = result.get("result", {})
-	return payload if isinstance(payload, dict) else {}
-
-
 def extract_metrics(script_wall_seconds: float,
 		    result: dict[str, Any]) -> dict[str, float | None]:
-	payload = extract_payload(result)
-	timing_summary = payload.get("timing_summary") or {}
-	client_wall = timing_summary.get("client_wall_seconds", {})
-	durations = timing_summary.get("durations_seconds", {})
+	qhw_result = backend_result_qhw(result)
+	if not qhw_result:
+		raise ValueError("backend result did not include normalized qhw_result")
+	timing = qhw_result.get("timing", {})
+	durations = timing.get("durations_seconds", {})
 	return {
 		"script_wall_seconds": script_wall_seconds,
-		"client_total_seconds": client_wall.get("total"),
-		"server_total_seconds": durations.get(
-			"server_total_created_to_completed"),
-		"execution_seconds": durations.get("execution"),
+		"client_total_seconds": None,
+		"server_total_seconds": durations.get("provider_total_seconds"),
+		"execution_seconds": durations.get("execution_seconds"),
 	}
 
 
@@ -161,27 +185,18 @@ def build_fits(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def result_job_ids(result: dict[str, Any]) -> list[str]:
-	payload = extract_payload(result)
-	qiskit_payload = payload.get("qiskit", {})
-	iqm_payload = payload.get("iqm", {})
-	job_id = (
-		iqm_payload.get("job_id")
-		or qiskit_payload.get("job_id")
-		or result.get("cid"))
+	qhw_result = backend_result_qhw(result)
+	if not qhw_result:
+		raise ValueError("backend result did not include normalized qhw_result")
+	job_id = (qhw_result.get("job", {}) or {}).get("id")
 	return [str(job_id)] if job_id else []
 
 
 def run_case(backend, circuits, args: argparse.Namespace,
 	     shots: int, dry_run: bool):
 	if dry_run:
-		return {
-			"cid": "dry-run",
-			"result": {
-				"dry_run": True,
-				"batch_semantics": "not-submitted",
-			},
-			"rc": 0,
-		}
+		name = getattr(circuits[0], "name", "dry-run") if circuits else "dry-run"
+		return dry_run_result(name, shots, len(circuits))
 	return to_jsonable(backend.run_circuits(
 		circuits,
 		shots=shots,
@@ -264,7 +279,8 @@ def main() -> int:
 					ok = False
 					error = str(exc)
 				wall = time.monotonic() - start
-				write_json(result_file, result)
+				result_files = write_backend_result_artifacts(
+					result_file, result)
 				records.append({
 					"experiment": "shot_sweep",
 					"ok": ok,
@@ -277,7 +293,9 @@ def main() -> int:
 					else backend.name,
 					"batch_semantics": "single-circuit",
 					"qasm_files": [str(qasm_file)],
-					"result_file": str(result_file),
+					"result_file": result_files.get("qhw"),
+					"raw_result_file": result_files.get("raw"),
+					"normalized_result_file": result_files.get("qhw"),
 					"job_ids": result_job_ids(result),
 					"metrics": extract_metrics(wall, result),
 				})
@@ -308,8 +326,9 @@ def main() -> int:
 					ok = False
 					error = str(exc)
 				wall = time.monotonic() - start
-				write_json(result_file, result)
-				payload = extract_payload(result)
+				result_files = write_backend_result_artifacts(
+					result_file, result)
+				qhw_result = backend_result_qhw(result)
 				records.append({
 					"experiment": "batch_sweep",
 					"ok": ok,
@@ -320,10 +339,13 @@ def main() -> int:
 					"batch_size": batch_size,
 					"backend_mode": args.backend if args.dry_run
 					else backend.name,
-					"batch_semantics": payload.get(
-						"batch_semantics", "qiskit-backend-run"),
+					"batch_semantics": (
+						"single-qhw-result"
+						if qhw_result else "qiskit-backend-run"),
 					"qasm_files": qasm_files,
-					"result_file": str(result_file),
+					"result_file": result_files.get("qhw"),
+					"raw_result_file": result_files.get("raw"),
+					"normalized_result_file": result_files.get("qhw"),
 					"job_ids": result_job_ids(result),
 					"metrics": extract_metrics(wall, result),
 				})

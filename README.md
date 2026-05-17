@@ -345,10 +345,11 @@ not be copied as the default pattern for new tests.
 
 `scripts/qfw_iqm_util/output.py` owns the output tree and JSON serialization.
 `scripts/qfw_iqm_util/timing.py` converts IQM timeline events into duration
-fields. `scripts/qfw_iqm_util/qiskit_exec.py` normalizes Qiskit results,
-counts, job IDs, and backend timing metadata into a common result payload.
-Direct IQM mode also writes provider-neutral `*.qhw.json` artifacts through
-`qhw-iqm` whenever a raw IQM payload is written as `*.raw.json`.
+fields. Direct IQM circuit executions write two primary per-case artifacts:
+the provider-native payload as `*.raw.json` and the provider-neutral
+`qhw-result-v1` payload as `*.qhw.json`. The scripts use the normalized qhw
+payload for timing analysis so the output does not depend on a private
+QFw-IQM wrapper format.
 
 This keeps each workflow focused on the experiment design:
 

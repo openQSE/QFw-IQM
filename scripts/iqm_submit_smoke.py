@@ -10,11 +10,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qfw_iqm_util.backend import add_backend_argument, get_backend
+from qfw_iqm_util.output import backend_result_qhw
 from qfw_iqm_util.output import create_run_paths
 from qfw_iqm_util.output import render_json_output
 from qfw_iqm_util.output import render_text_output
 from qfw_iqm_util.output import script_output_path
 from qfw_iqm_util.output import to_jsonable
+from qfw_iqm_util.output import write_backend_result_artifacts
 from qfw_iqm_util.output import write_json
 from qfw_iqm_util.output import write_script_output
 from qfw_iqm_util.qiskit_exec import write_qasm2_artifact
@@ -77,32 +79,31 @@ def main() -> int:
 		calibration_set_id=args.calibration_set_id,
 		timeout=args.timeout,
 		use_timeslot=args.use_timeslot))
-	write_json(result_file, result)
+	result_files = write_backend_result_artifacts(result_file, result)
 
-	payload = result.get("result", {})
-	timing_summary = (
-		payload.get("timing_summary")
-		if isinstance(payload, dict) else {})
+	qhw_result = backend_result_qhw(result)
+	if not qhw_result:
+		raise ValueError("backend result did not include normalized qhw_result")
+	qhw_payload = qhw_result.get("result", {})
+	qhw_job = qhw_result.get("job", {})
+	timing_summary = qhw_result.get("timing", {})
 	write_json(timing_file, timing_summary or {})
 
-	qiskit_payload = payload.get("qiskit", {}) if isinstance(
-		payload, dict) else {}
-	iqm_payload = payload.get("iqm", {}) if isinstance(payload, dict) else {}
 	summary = {
 		"ok": result.get("rc") == 0,
 		"run_id": paths.run_id,
 		"date_id": paths.date_id,
 		"backend_mode": backend.name,
 		"output_dir": str(paths.root),
-		"job_id": (
-			iqm_payload.get("job_id")
-			or qiskit_payload.get("job_id")
-			or result.get("cid")),
-		"counts": payload.get("counts") if isinstance(payload, dict) else None,
+		"job_id": qhw_job.get("id") or result.get("cid"),
+		"counts": qhw_payload.get("counts")
+		if isinstance(qhw_payload, dict) else None,
 		"files": {
 			"input": str(input_file),
 			"qasm": str(qasm_file),
-			"result": str(result_file),
+			"result": result_files.get("qhw"),
+			"raw_result": result_files.get("raw"),
+			"normalized_result": result_files.get("qhw"),
 			"timing_summary": str(timing_file),
 		},
 	}
